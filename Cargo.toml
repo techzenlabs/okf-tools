@@ -1,0 +1,39 @@
+[package]
+name = "okf-tools"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Open Knowledge Format v0.2 conformance checker, index generator and staleness report"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/techzenlabs/okf-tools"
+
+[[bin]]
+name = "okf-check"
+path = "src/bin/okf-check.rs"
+
+[[bin]]
+name = "okf-index"
+path = "src/bin/okf-index.rs"
+
+[dependencies]
+anyhow = "1"
+fancy-regex = "0.16"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+toml = "0.9"
+
+[profile.release]
+overflow-checks = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"

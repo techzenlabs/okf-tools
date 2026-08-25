@@ -1,0 +1,20 @@
+# engineering: a code repository's docs/ tree.
+#
+# The longest preset, because docs/ is where the estate's mass sits. Every
+# entry earns its place from a directory that exists in three or more
+# repositories, or from a gate that already requires the file.
+types = [
+  "API Reference",
+  "Architecture Note",
+  "Attested Computation",  # a run and its receipt (OKF v0.2 §10.2)
+  "Decision Record",
+  "Execution Plan",        # being done, or done: the doing grain
+  "Product Spec",
+  "Release Note",
+  "Repository Guide",      # the README a docs gate hard-requires
+  "Runbook",
+  "Security Note",
+  "Spike",                 # a timeboxed question, not a plan at another grain
+  "Work Item",             # the thing to be done: the epic grain
+  "Work Log",
+]

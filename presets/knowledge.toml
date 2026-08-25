@@ -1,0 +1,13 @@
+# knowledge: enterprise knowledge about systems that have no repository.
+#
+# No `Person` here, deliberately: a person-shaped page fails the type check in
+# a bundle that extends this preset, which is the schema half of the rule that
+# owner identity publishes and profiles do not.
+types = [
+  "Architecture Note",   # how systems relate; a refactor cannot invalidate it
+  "Decision Record",     # one name for a decision wherever it is recorded
+  "Runbook",             # how to operate the thing
+  "System",              # the anchor an `owner` record attaches to
+  "Use Case",
+  "Vendor Assessment",   # what we concluded, as against what the vendor says
+]

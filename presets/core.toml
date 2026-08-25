@@ -1,0 +1,12 @@
+# core: role classes that occur at every destination.
+#
+# These describe what kind of document this is in a way that is true whether
+# the page is a private note, a client's knowledge store or a repository's
+# docs/ tree, which is exactly why none of them belongs to one of those.
+types = [
+  "Glossary",             # terms, and the names that map onto them
+  "Governance Document",  # a policy that binds how the work is done
+  "Reference",            # a table or list looked up rather than read
+  "Source Document",      # third-party material held verbatim, whoever wrote it
+  "Template",             # a document whose job is to seed other documents
+]

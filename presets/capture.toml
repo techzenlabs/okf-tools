@@ -1,0 +1,12 @@
+# capture: an engagement's raw record.
+#
+# Nothing typed from this list reaches a published surface. That is a property
+# of where the bundle goes, not of a filter applied on the way out.
+types = [
+  "Capture",         # the raw item filed under an encounter
+  "Correspondence",  # mail and chat alike; medium is a tag, not a kind
+  "Meeting",         # a summary or notes from a room, whatever the room was
+  "Person",          # never promoted, never published
+  "Register",        # a standing list appended to and ticked off
+  "Work Log",        # the record of doing the work
+]

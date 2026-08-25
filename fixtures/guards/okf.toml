@@ -1,0 +1,12 @@
+# The three diagnostics okf-tools adds that the Python it ports had no concept
+# of: OKF v0.2 §13's two breaking changes, guarded against reintroduction, and
+# §10.2's conditionally-required `runtime`.
+config_version = 1
+okf_version = "0.2"
+bundle_root = "."
+title = "Guards fixture"
+description = "Diagnostics the port adds."
+max_warnings = 1000
+
+[vocabulary]
+extends = ["core", "engineering"]

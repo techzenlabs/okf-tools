@@ -1,0 +1,11 @@
+# A synthetic bundle carrying one instance of every diagnostic okf-check can
+# emit. Nothing here is derived from a real corpus.
+config_version = 1
+okf_version = "0.2"
+bundle_root = "."
+title = "Conformance fixture"
+description = "One instance of every diagnostic."
+max_warnings = 1000
+
+[vocabulary]
+extends = ["core", "engineering"]

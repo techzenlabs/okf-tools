@@ -1,0 +1,18 @@
+# A synthetic bundle exercising the four listing behaviours that have to
+# survive the port: marker-block rewriting, month grouping, drop-folder
+# suppression, and deepest-first directory ordering.
+config_version = 1
+okf_version = "0.2"
+bundle_root = "."
+title = "Listing fixture"
+description = "Four listing behaviours, one bundle."
+max_warnings = 1000
+
+[vocabulary]
+extends = ["core", "capture"]
+
+[index]
+suppress = ["inbox"]
+group_by_month = ["meetings"]
+no_index_under = ["meetings"]
+month_entry_glob = "summary*.md"
