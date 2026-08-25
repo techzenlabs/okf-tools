@@ -23,7 +23,24 @@ fn main() -> ExitCode {
 }
 
 fn run() -> anyhow::Result<ExitCode> {
+    // Positional arguments are meaningful here (bundle-relative path
+    // prefixes), so only flags are validated. An unrecognised flag still has
+    // to be refused: `--aply` silently meaning "report" is a surprise, and the
+    // same slip on a command that wrote would be a destructive one.
+    const FLAGS: [&str; 3] = ["--apply", "--dry-run", "--report"];
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(bad) = args
+        .iter()
+        .find(|a| a.starts_with("--") && !FLAGS.contains(&a.as_str()))
+    {
+        eprintln!(
+            "okf-migrate: unrecognised flag `{bad}`\n\n\
+             usage: okf-migrate [--report | --dry-run | --apply] [<path>…]\n\n\
+             With no flag, reports and writes nothing. Paths are\n\
+             bundle-relative prefixes, so a batch is one directory."
+        );
+        return Ok(ExitCode::FAILURE);
+    }
     let apply = args.iter().any(|a| a == "--apply");
     let dry_run = args.iter().any(|a| a == "--dry-run");
     let prefixes: Vec<&str> = args

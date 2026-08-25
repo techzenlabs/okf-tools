@@ -17,7 +17,19 @@ fn main() -> ExitCode {
     }
 }
 
+const USAGE: &str = "usage: okf-index [--check]\n\n\
+     Regenerates every index.md in the bundle from concept frontmatter.\n\
+     --check reports out-of-date indexes and writes nothing.";
+
 fn run() -> anyhow::Result<ExitCode> {
+    // Reject anything unrecognised rather than ignoring it. This command's
+    // default action WRITES, so a mistyped or probing flag that fell through
+    // to it would rewrite every index in the tree — which is exactly what
+    // `okf-index --help` used to do.
+    if let Some(bad) = unknown_argument(&["--check"]) {
+        eprintln!("okf-index: unrecognised argument `{bad}`\n\n{USAGE}");
+        return Ok(ExitCode::FAILURE);
+    }
     let check = std::env::args().any(|a| a == "--check");
     let cwd = std::env::current_dir()?;
     let (root, config) = okf_tools::open_bundle(&cwd)?;
@@ -42,4 +54,14 @@ fn run() -> anyhow::Result<ExitCode> {
         outcome.written, outcome.directories
     );
     Ok(ExitCode::SUCCESS)
+}
+
+/// The first argument that is not one this command accepts.
+///
+/// Positional arguments are rejected too: neither command takes one, and a
+/// stray path is far more likely to be a mistake than an intention.
+fn unknown_argument(accepted: &[&str]) -> Option<String> {
+    std::env::args()
+        .skip(1)
+        .find(|arg| !accepted.contains(&arg.as_str()))
 }
