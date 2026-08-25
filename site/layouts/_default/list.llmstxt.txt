@@ -1,0 +1,15 @@
+{{- /*
+  The human-legible reading list an agent fetches before anything else: title,
+  description and the raw-markdown URL, in the order the OKF listing uses.
+
+  It sits at the tenant root, at every section root and on every term page, so
+  `/team/data-team/llms.txt` is a cross-bundle reading list that no HTML
+  scraping reconstructs.
+*/ -}}
+# {{ .Title }}
+{{ with .Params.description }}
+{{ . }}
+{{ end }}
+{{ range .Pages -}}
+- [{{ partial "okf-meta.html" (dict "page" . "region" "title") }}]({{ with .OutputFormats.Get "okfmarkdown" }}{{ .Permalink }}{{ else }}{{ .Permalink }}{{ end }}){{ with .Params.description }}: {{ . }}{{ end }}
+{{ end -}}

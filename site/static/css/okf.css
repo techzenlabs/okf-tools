@@ -1,0 +1,119 @@
+/* The whole stylesheet. No preprocessor, no npm, no build step: one file
+   copied into `static/` by `okf-assemble`, the same way `mermaid.min.js` is.
+
+   The Chroma block at the bottom is why this file exists at all. Hugo
+   highlights code at build time with `noClasses = false`, which emits class
+   names rather than inline styles, so one stylesheet controls both themes and
+   no JavaScript ships for syntax highlighting. */
+
+:root {
+  color-scheme: light dark;
+  --okf-fg: #1b1b1f;
+  --okf-bg: #ffffff;
+  --okf-muted: #5a5a66;
+  --okf-rule: #dcdce4;
+  --okf-link: #1a4fd0;
+  --okf-code-bg: #f5f5f8;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --okf-fg: #e6e6ea;
+    --okf-bg: #14141a;
+    --okf-muted: #9a9aa6;
+    --okf-rule: #2e2e38;
+    --okf-link: #86b0ff;
+    --okf-code-bg: #1d1d25;
+  }
+}
+
+body {
+  margin: 0 auto;
+  max-width: 46rem;
+  padding: 1.5rem 1rem 4rem;
+  background: var(--okf-bg);
+  color: var(--okf-fg);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+a { color: var(--okf-link); }
+h1, h2, h3 { line-height: 1.25; }
+
+.okf-header,
+.okf-footer {
+  display: flex;
+  gap: 1rem;
+  align-items: baseline;
+  border-block: 1px solid var(--okf-rule);
+  padding: 0.5rem 0;
+  font-size: 0.9rem;
+}
+
+.okf-footer { margin-top: 3rem; }
+.okf-home { font-weight: 600; text-decoration: none; }
+.okf-local { color: var(--okf-muted); }
+.okf-description { color: var(--okf-muted); }
+
+.okf-facets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  margin: 0.75rem 0 1.5rem;
+  padding: 0;
+  font-size: 0.8rem;
+  color: var(--okf-muted);
+}
+
+.okf-facets dt { font-variant: small-caps; }
+.okf-facets dt::after { content: ":"; }
+.okf-facets dd { margin: 0; }
+
+.okf-search input {
+  width: 100%;
+  padding: 0.5rem;
+  font: inherit;
+  border: 1px solid var(--okf-rule);
+  border-radius: 4px;
+  background: var(--okf-bg);
+  color: inherit;
+}
+
+pre,
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+pre {
+  overflow-x: auto;
+  padding: 0.75rem;
+  border-radius: 4px;
+  background: var(--okf-code-bg);
+}
+
+pre.mermaid { background: none; text-align: center; }
+
+table { border-collapse: collapse; }
+th, td { border: 1px solid var(--okf-rule); padding: 0.3rem 0.6rem; }
+
+/* Chroma token classes. The set below is what Hugo's highlighter emits for
+   the languages this estate actually writes: sql, bash, python, yaml, json,
+   rust, nix, toml. An unlisted language still renders — Hugo emits a plain
+   `<pre><code class="language-…">` for one it does not know, with no warning
+   and no build failure, which is §11's tolerance posture applied to markup. */
+.highlight pre.chroma { background: var(--okf-code-bg); }
+.chroma .c, .chroma .ch, .chroma .cm, .chroma .c1, .chroma .cs { color: #6a737d; font-style: italic; }
+.chroma .k, .chroma .kc, .chroma .kd, .chroma .kn, .chroma .kp, .chroma .kr, .chroma .kt { color: #a626a4; }
+.chroma .s, .chroma .sb, .chroma .sc, .chroma .sd, .chroma .s2, .chroma .se, .chroma .sh, .chroma .si, .chroma .sx, .chroma .s1 { color: #50a14f; }
+.chroma .m, .chroma .mb, .chroma .mf, .chroma .mh, .chroma .mi, .chroma .il, .chroma .mo { color: #986801; }
+.chroma .na, .chroma .nt { color: #e45649; }
+.chroma .nf, .chroma .nb { color: #4078f2; }
+.chroma .o, .chroma .ow, .chroma .p { color: var(--okf-fg); }
+.chroma .err { color: #e45649; }
+.chroma .ln, .chroma .lnt { color: var(--okf-muted); }
+
+@media (prefers-color-scheme: dark) {
+  .chroma .c, .chroma .ch, .chroma .cm, .chroma .c1, .chroma .cs { color: #8b949e; }
+  .chroma .k, .chroma .kc, .chroma .kd, .chroma .kn, .chroma .kp, .chroma .kr, .chroma .kt { color: #d2a8ff; }
+  .chroma .s, .chroma .sb, .chroma .sc, .chroma .sd, .chroma .s2, .chroma .se, .chroma .sh, .chroma .si, .chroma .sx, .chroma .s1 { color: #a5d6ff; }
+  .chroma .m, .chroma .mb, .chroma .mf, .chroma .mh, .chroma .mi, .chroma .il, .chroma .mo { color: #ffab70; }
+  .chroma .na, .chroma .nt { color: #ff7b72; }
+  .chroma .nf, .chroma .nb { color: #79c0ff; }
+}

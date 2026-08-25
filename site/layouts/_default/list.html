@@ -1,0 +1,28 @@
+{{- /*
+  A section, or a taxonomy term.
+
+  A section's rendered body *is* the listing `okf-index` generated into its
+  `index.md`, so the human listing and the site navigation agree by
+  construction. `.Content` is empty for a term page and for a directory that
+  carries no `index.md`, which §11 permits, so the fallback below lists the
+  pages Hugo found rather than showing a reader an empty page.
+*/ -}}
+{{ define "main" }}
+<section class="okf-section">
+  {{- if not (strings.Contains .Content "<h1") }}
+  <h1>{{ partial "okf-meta.html" (dict "page" . "region" "title") }}</h1>
+  {{- end }}
+  {{- with .Params.description }}<p class="okf-description">{{ . }}</p>{{ end }}
+  {{ .Content }}
+  {{- if not .Content }}
+  <ul class="okf-fallback">
+    {{- range .Pages }}
+    <li>
+      <a href="{{ .RelPermalink }}">{{ .Title }}</a>
+      {{- with .Params.description }} &mdash; {{ . }}{{ end }}
+    </li>
+    {{- end }}
+  </ul>
+  {{- end }}
+</section>
+{{ end }}

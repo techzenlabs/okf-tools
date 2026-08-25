@@ -1,0 +1,74 @@
+{{- /*
+  OKF front matter, rendered for a reader and faceted for Pagefind.
+
+  Called with a `region`, because the three callers need three shapes and
+  §5.3's trust rule must have exactly one definition:
+
+    breadcrumb  a parent link, outside the indexed region
+    facets      the `data-pagefind-filter` block, inside `data-pagefind-body`
+    trust       the tier alone, which `index.json` reads back as a string
+    title       a display title, including for a page that has no `title`
+
+  The title fallback is not cosmetic. OKF §8 allows front matter on `index.md`
+  only at the bundle root, so *every* section listing in a conformant bundle
+  arrives with no `title` key at all and Hugo reports an empty one. Falling
+  back to the humanised directory name is what stops every section in the
+  estate rendering as a blank heading.
+
+  The tier is derived and never stored. No `verified` at all is unverified; a
+  `verified` entry whose actor is not a `human:` one is machine-confirmed; a
+  `human:<id>` actor is human-reviewed. Deriving it means no document carries
+  the tier twice and free to drift, and a reader filtering search to
+  human-reviewed pages is the whole reason the field exists.
+
+  Every read is `with`-guarded or normalised first. OKF §11 forbids a consumer
+  rejecting a bundle for a missing optional field or an unexpected shape, so a
+  template that indexed a param directly would make the site stricter than the
+  spec it serves: `verified` written as one mapping rather than a list, or as
+  a bare string, has to render rather than fail.
+*/ -}}
+{{- $page := .page -}}
+{{- $region := .region -}}
+{{- $trust := "unverified" -}}
+{{- with $page.Params.verified -}}
+  {{- $trust = "machine-confirmed" -}}
+  {{- range (cond (reflect.IsSlice .) . (slice .)) -}}
+    {{- if reflect.IsMap . -}}
+      {{- if hasPrefix (printf "%v" (index . "by")) "human:" -}}
+        {{- $trust = "human-reviewed" -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- if eq $region "trust" -}}
+{{- $trust -}}
+{{- else if eq $region "title" -}}
+{{- or $page.Title (humanize (path.Base $page.RelPermalink)) -}}
+{{- else if eq $region "breadcrumb" -}}
+  {{- with $page.Parent }}<nav class="okf-crumb"><a href="{{ .RelPermalink }}">{{ .Title }}</a></nav>{{ end -}}
+{{- else -}}
+  <dl class="okf-facets">
+    {{- with $page.Params.type }}
+    <dt>type</dt>
+    <dd><span data-pagefind-filter="type">{{ . }}</span></dd>
+    {{- end }}
+    {{- with $page.Params.status }}
+    <dt>status</dt>
+    <dd><span data-pagefind-filter="status">{{ . }}</span></dd>
+    {{- end }}
+    {{- with $page.Params.team }}
+    <dt>team</dt>
+    <dd>
+      {{- range (cond (reflect.IsSlice .) . (slice .)) }}
+      <span data-pagefind-filter="team">{{ . }}</span>
+      {{- end }}
+    </dd>
+    {{- end }}
+    <dt>trust</dt>
+    <dd><span data-pagefind-filter="trust">{{ $trust }}</span></dd>
+    {{- with $page.Params.stale_after }}
+    <dt>stale after</dt>
+    <dd>{{ . }}</dd>
+    {{- end }}
+  </dl>
+{{- end -}}

@@ -1,0 +1,40 @@
+{{- /*
+  `/index.json`, the retrieval entry point: one flat record per page across
+  every mounted bundle, so an agent filters locally and then fetches the raw
+  markdown named in `raw`.
+
+  Absent values are `null` rather than omitted, so a consumer can index on
+  shape. That is why the records are built with `dict` and handed to
+  `jsonify` rather than concatenated: an absent param is a nil the encoder
+  writes as `null`, and a missing field can never silently become a missing
+  key.
+
+  Every page with a source file gets a record, sections included, so the JSON
+  index and the raw-markdown surface cover exactly the same set. Taxonomy term
+  pages have no source and therefore no raw markdown, and are not listed.
+
+  The trust tier comes from `okf-meta.html` so §5.3's rule has exactly one
+  definition, here and on the page.
+*/ -}}
+{{- $records := slice -}}
+{{- range where site.Pages "File" "!=" nil -}}
+  {{- $trust := printf "%s" (partial "okf-meta.html" (dict "page" . "region" "trust")) -}}
+  {{- $raw := "" -}}
+  {{- with .OutputFormats.Get "okfmarkdown" }}{{ $raw = .RelPermalink }}{{ end -}}
+  {{- $bundle := "" -}}
+  {{- with (index (split (strings.TrimPrefix "/" .RelPermalink) "/") 0) }}{{ $bundle = . }}{{ end -}}
+  {{- $records = $records | append (dict
+      "path" .RelPermalink
+      "raw" $raw
+      "type" .Params.type
+      "title" (partial "okf-meta.html" (dict "page" . "region" "title"))
+      "team" .Params.team
+      "project" .Params.project
+      "bundle" $bundle
+      "trust" $trust
+      "verified" .Params.verified
+      "status" .Params.status
+      "stale_after" .Params.stale_after
+      "sources" .Params.sources) -}}
+{{- end -}}
+{{- jsonify (dict "indent" "  ") $records -}}

@@ -1,0 +1,28 @@
+# A synthetic tenant. Every value here is invented: the repositories do not
+# exist, the commits are placeholders, and the bundles are fixtures in this
+# repository reached with `--local`. Nothing about a real engagement reaches a
+# public repository, which is a rule with a gate rather than a habit.
+schema_version = 1
+tenant = "fixture"
+asset_extensions = ["png", "svg"]
+
+[site]
+title = "Fixture tenant"
+base_url = "https://fixture.invalid/"
+description = "Two synthetic bundles, assembled to exercise every measured trap."
+
+[[bundle]]
+id = "alpha"
+repo = "https://example.invalid/alpha.git"
+ref = "refs/heads/main"
+rev = "1111111111111111111111111111111111111111"
+subdir = "."
+credential = "fixture-forge"
+
+[[bundle]]
+id = "beta"
+repo = "https://example.invalid/beta.git"
+ref = "refs/heads/main"
+rev = "2222222222222222222222222222222222222222"
+subdir = "."
+credential = "fixture-forge"

@@ -17,12 +17,19 @@
 //! generated indexes *and* identical diagnostics. A checker that agrees on
 //! output but disagrees on what it complains about has not been ported.
 
+pub mod assemble;
+pub mod bootstrap;
 pub mod check;
 pub mod config;
 pub mod frontmatter;
 pub mod glob;
 pub mod index;
+pub mod layouts;
+pub mod manifest;
 pub mod migrate;
+pub mod scan;
+pub mod sitegen;
+pub mod sitelinks;
 pub mod walk;
 
 /// Locate the bundle root and its configuration.

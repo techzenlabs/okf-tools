@@ -1,0 +1,17 @@
+{{- /*
+  One document. The facets and the shell come from `baseof.html`.
+
+  The heading is added only when the document does not already carry one. An
+  OKF document conventionally opens with its own `# Title`, so a template that
+  always emitted one would put two first-level headings on every page in the
+  estate — legal HTML, wrong document, and invisible to any build check.
+*/ -}}
+{{ define "main" }}
+<article class="okf-page">
+  {{- if not (strings.Contains .Content "<h1") }}
+  <h1>{{ partial "okf-meta.html" (dict "page" . "region" "title") }}</h1>
+  {{- end }}
+  {{- with .Params.description }}<p class="okf-description">{{ . }}</p>{{ end }}
+  {{ .Content }}
+</article>
+{{ end }}
