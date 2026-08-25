@@ -15,6 +15,10 @@ path = "src/bin/okf-check.rs"
 name = "okf-index"
 path = "src/bin/okf-index.rs"
 
+[[bin]]
+name = "okf-migrate"
+path = "src/bin/okf-migrate.rs"
+
 [dependencies]
 anyhow = "1"
 fancy-regex = "0.16"

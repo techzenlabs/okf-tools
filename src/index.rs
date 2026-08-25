@@ -31,10 +31,10 @@ fn compiled(pattern: &str) -> Regex {
     Regex::new(pattern).expect("static regex literal must compile")
 }
 
-static H1: LazyLock<Regex> = LazyLock::new(|| compiled(r"(?m)^#\s+(.+?)\s*$"));
+pub(crate) static H1: LazyLock<Regex> = LazyLock::new(|| compiled(r"(?m)^#\s+(.+?)\s*$"));
 static H1_LINE: LazyLock<Regex> = LazyLock::new(|| compiled(r"(?m)^#\s+.+?$"));
-static PARA_SPLIT: LazyLock<Regex> = LazyLock::new(|| compiled(r"\n\s*\n"));
-static MD_LINK: LazyLock<Regex> = LazyLock::new(|| compiled(r"\[([^\]]+)\]\([^)]*\)"));
+pub(crate) static PARA_SPLIT: LazyLock<Regex> = LazyLock::new(|| compiled(r"\n\s*\n"));
+pub(crate) static MD_LINK: LazyLock<Regex> = LazyLock::new(|| compiled(r"\[([^\]]+)\]\([^)]*\)"));
 static ROOT_FM_GREEDY_NL: LazyLock<Regex> = LazyLock::new(|| compiled(r"(?s)^---\n.*?\n---\n+"));
 static ROOT_FM_ONE_NL: LazyLock<Regex> = LazyLock::new(|| compiled(r"(?s)^---\n.*?\n---\n"));
 static MONTH_PREFIX: LazyLock<Regex> = LazyLock::new(|| compiled(r"^\d{4}-\d{2}"));
@@ -421,7 +421,8 @@ fn derived_description(body: &str) -> String {
 }
 
 /// Cut to at most `limit` characters, then back to the last whole word.
-fn truncate_words(text: &str, limit: usize) -> String {
+#[must_use]
+pub fn truncate_words(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
         return text.to_owned();
     }
@@ -430,7 +431,7 @@ fn truncate_words(text: &str, limit: usize) -> String {
     format!("{head}…")
 }
 
-fn starts_with_any(text: &str, prefixes: &[&str]) -> bool {
+pub(crate) fn starts_with_any(text: &str, prefixes: &[&str]) -> bool {
     prefixes.iter().any(|p| text.starts_with(p))
 }
 
@@ -479,10 +480,7 @@ mod tests {
             bracket("from noreply@example.com now"),
             "from <noreply@example.com> now"
         );
-        assert_eq!(
-            bracket("(alerts@example.net)"),
-            "(<alerts@example.net>)"
-        );
+        assert_eq!(bracket("(alerts@example.net)"), "(<alerts@example.net>)");
         assert_eq!(
             bracket("<already@bracketed.com>"),
             "<already@bracketed.com>"

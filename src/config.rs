@@ -56,6 +56,21 @@ pub enum ConfigError {
     },
 }
 
+/// A path shape and the `type` every document matching it carries.
+///
+/// Rules are tried in file order and the first match wins, so a more specific
+/// shape is written above a more general one. `okf-migrate --report` names the
+/// rule that matched each file, which is what makes an ordering mistake
+/// visible rather than silent.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeRule {
+    /// A bundle-relative glob. See [`crate::glob`].
+    pub path: String,
+    #[serde(rename = "type")]
+    pub concept_type: String,
+}
+
 /// A vendored upstream mirror whose entry titles carry a site tail.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -80,6 +95,18 @@ pub struct Vocabulary {
 pub struct Paths {
     /// Directory names never descended into.
     pub skip_names: Vec<String>,
+    /// Globs whose files a generator owns.
+    ///
+    /// `okf-migrate` never writes frontmatter into one: the next regeneration
+    /// would truncate it, and a freshness gate would then fail closed. The
+    /// generator emits the block or nobody does.
+    pub generated: Vec<String>,
+    /// Whether `README.md` files survive migration in this bundle.
+    ///
+    /// True for a code repository, where a docs gate or GitHub itself depends
+    /// on the name; false for a knowledge bundle, where §8's generated
+    /// `index.md` takes over the listing role.
+    pub keep_readme: bool,
 }
 
 impl Default for Paths {
@@ -89,6 +116,8 @@ impl Default for Paths {
                 .iter()
                 .map(|s| (*s).to_owned())
                 .collect(),
+            generated: Vec::new(),
+            keep_readme: true,
         }
     }
 }
@@ -144,6 +173,8 @@ pub struct Config {
     pub index: IndexConfig,
     #[serde(rename = "mirror")]
     pub mirrors: Vec<Mirror>,
+    #[serde(rename = "type_rules")]
+    pub type_rules: Vec<TypeRule>,
 }
 
 impl Default for Config {
@@ -159,6 +190,7 @@ impl Default for Config {
             paths: Paths::default(),
             index: IndexConfig::default(),
             mirrors: Vec::new(),
+            type_rules: Vec::new(),
         }
     }
 }
@@ -229,6 +261,28 @@ impl Config {
         }
         names.extend(self.vocabulary.types.iter().cloned());
         Ok(names)
+    }
+
+    /// The `type` for a bundle-relative path, with the rule that decided it.
+    ///
+    /// `None` means no rule matched. That file is *reported*, never assigned a
+    /// default: guessing `type`, the one field §11 requires, would be the same
+    /// failure as fabricating `verified`.
+    #[must_use]
+    pub fn type_for(&self, relative: &str) -> Option<(&str, &str)> {
+        self.type_rules
+            .iter()
+            .find(|rule| crate::glob::matches(&rule.path, relative))
+            .map(|rule| (rule.concept_type.as_str(), rule.path.as_str()))
+    }
+
+    /// Does a generator own this file?
+    #[must_use]
+    pub fn is_generated(&self, relative: &str) -> bool {
+        self.paths
+            .generated
+            .iter()
+            .any(|pattern| crate::glob::matches(pattern, relative))
     }
 
     /// Compiled mirror rules, paired as (directory prefix, title pattern).

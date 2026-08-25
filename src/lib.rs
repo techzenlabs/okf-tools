@@ -20,7 +20,9 @@
 pub mod check;
 pub mod config;
 pub mod frontmatter;
+pub mod glob;
 pub mod index;
+pub mod migrate;
 pub mod walk;
 
 /// Locate the bundle root and its configuration.
