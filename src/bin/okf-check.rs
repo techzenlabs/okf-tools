@@ -16,7 +16,14 @@ fn main() -> ExitCode {
     }
 }
 
+const USAGE: &str = "usage: okf-check [--quiet]\n\n\
+     Validates the bundle against OKF v0.2. --quiet suppresses warnings.";
+
 fn run() -> anyhow::Result<ExitCode> {
+    if let Some(bad) = unknown_argument(&["--quiet"]) {
+        eprintln!("okf-check: unrecognised argument `{bad}`\n\n{USAGE}");
+        return Ok(ExitCode::FAILURE);
+    }
     let quiet = std::env::args().any(|a| a == "--quiet");
     let cwd = std::env::current_dir()?;
     let (root, config) = okf_tools::open_bundle(&cwd)?;
@@ -55,4 +62,10 @@ fn run() -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::FAILURE);
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn unknown_argument(accepted: &[&str]) -> Option<String> {
+    std::env::args()
+        .skip(1)
+        .find(|arg| !accepted.contains(&arg.as_str()))
 }
