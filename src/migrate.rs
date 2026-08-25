@@ -269,11 +269,57 @@ fn title_case(text: &str) -> String {
         .join(" ")
 }
 
+/// A `Key: value` line, the shape a governance metadata block is written in:
+/// `Status: accepted`, `Owner: architecture-owner`, `Last reviewed: 2026-06-12`.
+///
+/// The key is deliberately narrow — one leading capital, then at most thirty
+/// more letters, digits, spaces, slashes, hyphens or underscores before the
+/// colon — so that an ordinary sentence containing a colon does not match.
+static METADATA_LINE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    #[expect(
+        clippy::expect_used,
+        reason = "static pattern literal, forced by tests in this module"
+    )]
+    regex::Regex::new(r"^[A-Z][A-Za-z0-9 /_-]{0,30}:\s*\S")
+        .expect("static regex literal must compile")
+});
+
+/// Whether a paragraph opens a governance metadata block rather than prose.
+///
+/// The test is the paragraph's first line, because that is the only line whose
+/// shape is reliable. A block's later lines are not all keyed: a long
+/// `Review cadence:` or `Status:` value wraps onto continuation lines that are
+/// prose in isolation, and a whole-paragraph test therefore misses the block
+/// entirely. Measured on `radiology-platform`, requiring every line to be
+/// keyed left 101 of 1,633 blocks undetected; requiring only the first line
+/// leaves none.
+///
+/// The narrow key pattern is what stops this eating real prose. It costs three
+/// documents across the three largest bundles in the estate — 3,992 documents
+/// — and each of those is *reported* as undescribed rather than given a wrong
+/// description, which is the same refusal this module applies to `type`.
+fn opens_a_metadata_block(para: &str) -> bool {
+    para.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .is_some_and(|first| METADATA_LINE.is_match(first))
+}
+
 /// The first paragraph that is prose: not a heading, list, table row, quote,
-/// code fence or comment.
+/// code fence, comment, or governance metadata block.
+///
+/// The metadata exclusion is not a nicety. Four repositories in this estate
+/// open almost every document with a `Status:` / `Owner:` / `Last reviewed:`
+/// block directly under the H1, and without this rule that block becomes the
+/// description of 90% of their documents and propagates into every generated
+/// listing. Measured on `radiology-platform`: 1,633 of 1,815 documents, of
+/// which 1,631 have real prose in a later paragraph. The two that do not are
+/// its `0000-template.md` files, which are correctly reported as undescribed.
 fn derive_description(body: &str) -> Option<String> {
     let para = PARA_SPLIT.split(body).map(str::trim).find(|p| {
-        !p.is_empty() && !starts_with_any(p, &["#", "*", "-", "|", ">", "<!--", "```", "1."])
+        !p.is_empty()
+            && !starts_with_any(p, &["#", "*", "-", "|", ">", "<!--", "```", "1."])
+            && !opens_a_metadata_block(p)
     })?;
     let collapsed = para.split_whitespace().collect::<Vec<_>>().join(" ");
     let flattened = MD_LINK.replace_all(&collapsed, "${1}").into_owned();
@@ -457,6 +503,86 @@ mod tests {
         let second = plan_one("adr/x.md", &first, &config);
         assert_eq!(second.skip, Some(Skip::AlreadyMigrated));
         assert!(second.rewritten.is_none());
+    }
+
+    #[test]
+    fn a_governance_metadata_block_is_not_a_description() {
+        let text = "# Use Postgres\n\nStatus: accepted\nOwner: architecture-owner\nLast reviewed: 2026-06-12\n\nWe pick Postgres because it is already run here.\n";
+        let entry = plan_one(
+            "adr/0001-postgres.md",
+            text,
+            &config_with(&[("adr/*.md", "Decision Record")]),
+        );
+        assert_eq!(entry.description_source, Source::Paragraph);
+        assert_eq!(
+            entry.description.as_deref(),
+            Some("We pick Postgres because it is already run here.")
+        );
+    }
+
+    #[test]
+    fn a_single_line_status_block_is_skipped_too() {
+        // 26 of radiology-platform's 1,815 documents open on exactly this, so
+        // a rule requiring two or more lines would leave every one of them
+        // describing itself as "Status: accepted".
+        let text = "# Amended Report Distribution\n\nStatus: accepted\n\nAmended reports reach every original recipient.\n";
+        let entry = plan_one(
+            "adr/0070-amended.md",
+            text,
+            &config_with(&[("adr/*.md", "Decision Record")]),
+        );
+        assert_eq!(
+            entry.description.as_deref(),
+            Some("Amended reports reach every original recipient.")
+        );
+    }
+
+    #[test]
+    fn a_metadata_block_with_a_wrapped_value_is_still_a_block() {
+        // 101 of radiology-platform's blocks look like this: the last value is
+        // long enough to wrap, and the continuation line is prose in
+        // isolation. Testing every line would read the whole block as a
+        // description; testing the first line reads it as metadata.
+        let text = "# Order Intake\n\nStatus: accepted\nOwner: integration-owner\nReview cadence: before changing HL7 order intake, report delivery,\nor billing handoff\n\nHL7 orders arrive over MLLP and are acknowledged synchronously.\n";
+        let entry = plan_one(
+            "architecture/order-intake.md",
+            text,
+            &config_with(&[("architecture/*.md", "Architecture Note")]),
+        );
+        assert_eq!(
+            entry.description.as_deref(),
+            Some("HL7 orders arrive over MLLP and are acknowledged synchronously.")
+        );
+    }
+
+    #[test]
+    fn a_second_status_paragraph_is_skipped_as_well() {
+        // data-lakehouse writes a keyed metadata block, then a separate
+        // `Status: **1 of 1 done** (...)` annotation, and only then the real
+        // description. Skipping one block and stopping at the next left 92
+        // documents describing themselves by their completion count.
+        let text = "# Cert Register\n\nOwner: cert3\nReviewed: 2026-06-25\n\nStatus: **1 of 1 done** (`0223` landed the transport\ndescriptor).\n\nA single-issue resolution pass certifying the connector end to end.\n";
+        let entry = plan_one(
+            "release/cert-register.md",
+            text,
+            &config_with(&[("release/*.md", "Release Note")]),
+        );
+        assert_eq!(
+            entry.description.as_deref(),
+            Some("A single-issue resolution pass certifying the connector end to end.")
+        );
+    }
+
+    #[test]
+    fn a_document_that_is_only_metadata_is_reported_rather_than_described() {
+        let text = "# Template\n\nStatus: proposed\nOwner: TBD\n";
+        let entry = plan_one(
+            "adr/0000-template.md",
+            text,
+            &config_with(&[("adr/*.md", "Decision Record")]),
+        );
+        assert_eq!(entry.description_source, Source::None);
+        assert_eq!(entry.description, None);
     }
 
     #[test]
