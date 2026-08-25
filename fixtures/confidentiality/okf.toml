@@ -1,0 +1,19 @@
+# A bundle whose reader is a client, with all three confidentiality rules on.
+#
+# Synthetic. Every name in this tree was invented for it: nothing here is
+# derived from a real bundle or imported from private history.
+config_version = 1
+okf_version = "0.2"
+bundle_root = "."
+title = "Confidentiality fixture"
+description = "A client-facing bundle, with pages that must fail its gates."
+
+[vocabulary]
+extends = ["core", "knowledge"]
+
+[confidentiality]
+closed_vocabulary = true
+links_stay_in_bundle = true
+owner_record = true
+# Narrowed to the tenant's own site, so a vendor URL is refused too.
+site_urls = ["https://docs.example.test/"]

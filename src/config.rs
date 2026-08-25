@@ -153,6 +153,179 @@ impl Default for IndexConfig {
     }
 }
 
+/// The rules a bundle turns on because its reader is outside the estate.
+///
+/// Every one of these makes an error out of something OKF §11 leaves to
+/// convention, so every one of them is **off by default**. §11 forbids a
+/// consumer rejecting a bundle over an unknown `type` or an unknown key, and a
+/// checker that errored on those unasked would be non-conformant itself. A
+/// bundle opts in because the convention it is buying is a confidentiality
+/// boundary rather than a style preference: the reader on the other side is a
+/// client, and the failure mode is disclosure rather than untidiness.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Confidentiality {
+    /// An unknown `type` is an error rather than a warning.
+    ///
+    /// The vocabulary is closed **by intent**: `knowledge` has no `Person`, so
+    /// a person-shaped page fails the type check outright rather than being
+    /// listed among the warnings somebody meant to get to.
+    pub closed_vocabulary: bool,
+    /// A link whose target is not in this bundle is an error.
+    ///
+    /// The backstop for the case `okf-promote` cannot see, where a page is
+    /// hand-copied and a link is missed. Containment is not enough on its own:
+    /// a copied `../people/dana-quill.md` resolves *inside* the new bundle
+    /// root and simply is not there, so the target has to exist.
+    pub links_stay_in_bundle: bool,
+    /// `owner` must be a sequence of `{name, title, email}` records, and any
+    /// other subkey is an error.
+    ///
+    /// The schema is the enforcement. A prose convention saying "do not add an
+    /// assessment here" is a convention; a record with nowhere to grow is a
+    /// boundary.
+    pub owner_record: bool,
+    /// Absolute URL prefixes this bundle may link to.
+    ///
+    /// Empty means any `http`/`https` URL is acceptable, which is the reading
+    /// that lets a promoted page cite a vendor document. Naming prefixes
+    /// narrows it to the tenant's own site and nothing else.
+    pub site_urls: Vec<String>,
+}
+
+/// A bundle that promoted pages are copied into.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Destination {
+    /// The name `--to` is given.
+    pub name: String,
+    /// Where the bundle is checked out, relative to this repository's root.
+    pub path: String,
+    /// The published base URL, joined with the page's bundle-relative path to
+    /// give the `promoted_to` value written back into the source.
+    pub url: String,
+}
+
+/// Where a source page goes, decided before anything is drafted.
+///
+/// The routing rule is data rather than derivation: a page about a system that
+/// has a repository belongs beside that repository's code, and no tool can
+/// work out which systems those are. `--to` naming a different bundle than the
+/// route is a refusal, not a preference.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Route {
+    /// A bundle-relative glob over source pages. See [`crate::glob`].
+    pub from: String,
+    /// The [`Destination::name`] this shape promotes to.
+    pub to: String,
+    /// The destination directory the page lands in.
+    pub into: String,
+}
+
+/// A source repository, as seen from a destination bundle.
+///
+/// `--refresh` and `--drift` run where both repositories are checked out,
+/// which is one person's machine and never a client's runner.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceRepo {
+    /// Matched against the `repo` recorded in a page's `promoted_from`.
+    pub repo: String,
+    /// Where that repository is checked out, relative to this one's root.
+    pub path: String,
+}
+
+/// `[promote]`, the routing table and the two private classes.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct PromoteConfig {
+    /// Source prefixes holding the interpretive layer. A link into one is
+    /// resolved into a plain name or into the `owner` record, never carried.
+    pub profile_prefixes: Vec<String>,
+    /// Source prefixes holding raw evidence. A claim resting on one is
+    /// restated as a dated labelled statement and the citation is dropped.
+    pub evidence_prefixes: Vec<String>,
+    #[serde(rename = "destination")]
+    pub destinations: Vec<Destination>,
+    #[serde(rename = "route")]
+    pub routes: Vec<Route>,
+    #[serde(rename = "source")]
+    pub sources: Vec<SourceRepo>,
+}
+
+impl Default for PromoteConfig {
+    fn default() -> Self {
+        Self {
+            profile_prefixes: vec!["org/people".to_owned()],
+            evidence_prefixes: ["meetings", "emails", "chats", "inbox"]
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
+            destinations: Vec::new(),
+            routes: Vec::new(),
+            sources: Vec::new(),
+        }
+    }
+}
+
+impl PromoteConfig {
+    /// The route that claims `relative`, or `None` when nothing does.
+    ///
+    /// First match wins, as `[[type_rules]]` does, so a page named explicitly
+    /// is written above the shape that would otherwise sweep it up.
+    #[must_use]
+    pub fn route_for(&self, relative: &str) -> Option<&Route> {
+        self.routes
+            .iter()
+            .find(|route| crate::glob::matches(&route.from, relative))
+    }
+
+    /// The destination named `name`.
+    #[must_use]
+    pub fn destination(&self, name: &str) -> Option<&Destination> {
+        self.destinations.iter().find(|d| d.name == name)
+    }
+
+    /// The checkout recorded for the source repository named `repo`.
+    #[must_use]
+    pub fn source(&self, repo: &str) -> Option<&SourceRepo> {
+        self.sources.iter().find(|s| s.repo == repo)
+    }
+
+    /// Which private class, if any, a source-relative path belongs to.
+    #[must_use]
+    pub fn class_of(&self, source_relative: &str) -> Option<PrivateClass> {
+        if under_any(&self.profile_prefixes, source_relative) {
+            return Some(PrivateClass::Profile);
+        }
+        if under_any(&self.evidence_prefixes, source_relative) {
+            return Some(PrivateClass::Evidence);
+        }
+        None
+    }
+}
+
+/// The two kinds of page a promoted one must never point at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivateClass {
+    /// A profile. The interpretive layer, which never travels.
+    Profile,
+    /// Raw evidence. The path itself discloses, so the citation is dropped
+    /// rather than kept and marked unresolvable.
+    Evidence,
+}
+
+/// Is `path` at or under one of `prefixes`?
+///
+/// Segment-aware, so `meetings-policy.md` is not under `meetings`.
+fn under_any(prefixes: &[String], path: &str) -> bool {
+    prefixes.iter().any(|prefix| {
+        let prefix = prefix.trim_end_matches('/');
+        path == prefix || path.starts_with(&format!("{prefix}/"))
+    })
+}
+
 /// The parsed `okf.toml`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -171,6 +344,9 @@ pub struct Config {
     pub vocabulary: Vocabulary,
     pub paths: Paths,
     pub index: IndexConfig,
+    /// The rules a client-facing bundle opts into. All off by default.
+    pub confidentiality: Confidentiality,
+    pub promote: PromoteConfig,
     #[serde(rename = "mirror")]
     pub mirrors: Vec<Mirror>,
     #[serde(rename = "type_rules")]
@@ -189,6 +365,8 @@ impl Default for Config {
             vocabulary: Vocabulary::default(),
             paths: Paths::default(),
             index: IndexConfig::default(),
+            confidentiality: Confidentiality::default(),
+            promote: PromoteConfig::default(),
             mirrors: Vec::new(),
             type_rules: Vec::new(),
         }
@@ -380,6 +558,64 @@ mod tests {
             ..Config::default()
         };
         assert!(config.types().is_err());
+    }
+
+    #[test]
+    fn the_confidentiality_rules_are_off_unless_a_bundle_asks() {
+        let conf = Config::default().confidentiality;
+        assert!(!conf.closed_vocabulary);
+        assert!(!conf.links_stay_in_bundle);
+        assert!(!conf.owner_record);
+        assert!(conf.site_urls.is_empty());
+    }
+
+    #[test]
+    fn the_first_matching_route_wins_so_a_named_page_beats_a_shape() {
+        let config: Config = toml::from_str(
+            "[[promote.route]]\n\
+             from = \"org/systems/mill.md\"\n\
+             to = \"code-repo\"\n\
+             into = \"docs/systems\"\n\
+             \n\
+             [[promote.route]]\n\
+             from = \"org/systems/*.md\"\n\
+             to = \"knowledge\"\n\
+             into = \"systems\"\n",
+        )
+        .unwrap_or_default();
+        assert_eq!(
+            config
+                .promote
+                .route_for("org/systems/mill.md")
+                .map(|r| r.to.as_str()),
+            Some("code-repo")
+        );
+        assert_eq!(
+            config
+                .promote
+                .route_for("org/systems/press.md")
+                .map(|r| r.to.as_str()),
+            Some("knowledge")
+        );
+        assert!(config.promote.route_for("meetings/x/summary.md").is_none());
+    }
+
+    /// A prefix match on a bare string would make `meetings-policy.md` private
+    /// and `org/people-process.md` a profile. Neither is.
+    #[test]
+    fn private_classes_match_whole_path_segments() {
+        let promote = PromoteConfig::default();
+        assert_eq!(
+            promote.class_of("org/people/dana-quill.md"),
+            Some(PrivateClass::Profile)
+        );
+        assert_eq!(
+            promote.class_of("meetings/2026-03-04-x/summary.md"),
+            Some(PrivateClass::Evidence)
+        );
+        assert_eq!(promote.class_of("org/people-process.md"), None);
+        assert_eq!(promote.class_of("meetings-policy.md"), None);
+        assert_eq!(promote.class_of("org/systems/press.md"), None);
     }
 
     #[test]
