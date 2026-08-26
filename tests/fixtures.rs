@@ -901,6 +901,110 @@ fn a_retype_moves_the_type_and_nothing_else() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// `stale_after` was regex-checked for shape and never compared to anything —
+/// okf-tools#15. A staleness field that cannot go stale is the same defect as
+/// the two dead `okf.toml` keys closed in #13, and worse: this one is in the
+/// *document* vocabulary, so an author writing it reasonably believes the
+/// document will be flagged when it lapses.
+///
+/// The day comes out of the bundle's committed `.gate-as-of`, never out of a
+/// clock, so this test asserts the same three lines on every day it is ever
+/// run. That is the point rather than a convenience: the sweep this finding
+/// came from (dotfiles#202) found twenty-one gates whose verdict moved with
+/// the wall clock while the derivation deciding whether to run them was cached
+/// on its inputs, and a fixture reading the clock would be the twenty-second.
+#[test]
+fn a_lapsed_document_is_reported_and_the_boundary_day_is_not() {
+    let (root, config) = load("staleness");
+    let report = check::check_bundle(&root, &config).unwrap();
+
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    assert_eq!(
+        report.warnings,
+        [
+            "lapsed.md: stale_after `2026-06-14` has passed (as of 2026-06-15)",
+            "malformed.md: stale_after `2026-13-45` is not YYYY-MM-DD",
+            "quoted-lapsed.md: stale_after `2020-01-01` has passed (as of 2026-06-15)",
+        ]
+    );
+
+    // The three silent files, named rather than left to the count: the as-of
+    // day itself is the last good day, a later day is fresh, and a document
+    // with no `stale_after` is not this check's business.
+    for quiet in ["boundary.md", "fresh.md", "undated.md"] {
+        assert!(
+            !report.warnings.iter().any(|w| w.starts_with(quiet)),
+            "{quiet} reported: {:?}",
+            report.warnings
+        );
+    }
+}
+
+/// The negative control, which is what says the day is read rather than the
+/// verdict hard-coded: move the day past every date in the bundle and the
+/// boundary file joins the lapsed ones.
+#[test]
+fn moving_the_day_moves_the_verdict() {
+    let (root, config) = load("staleness");
+    let later = Config {
+        as_of: okf_tools::staleness::Day::parse("2026-06-16"),
+        ..config
+    };
+    let report = check::check_bundle(&root, &later).unwrap();
+    assert!(
+        report.warnings.contains(
+            &"boundary.md: stale_after `2026-06-15` has passed (as of 2026-06-16)".to_owned()
+        ),
+        "{:?}",
+        report.warnings
+    );
+}
+
+/// A bundle that writes the field and commits no day is told so on the page
+/// that writes it, because that page's author is who needs to know.
+///
+/// It stays a warning rather than an error: §11 forbids a consumer rejecting a
+/// bundle over a key it does not like. `max_warnings` is what gives it teeth,
+/// and the second half of this test is why it is safe to ship — a document
+/// with no `stale_after` reports nothing, which is every document in the
+/// estate today.
+#[test]
+fn a_bundle_with_no_committed_day_reports_the_field_as_unenforced() {
+    let (root, config) = load("staleness-undated");
+    assert!(config.as_of.is_none());
+    let report = check::check_bundle(&root, &config).unwrap();
+
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    assert_eq!(
+        report.warnings,
+        [
+            "dated.md: stale_after `2020-01-01` enforces nothing: this bundle has \
+             no `.gate-as-of` naming the day to measure it against",
+        ]
+    );
+}
+
+/// An as-of file that exists and is not a day is a hard failure, not a
+/// fallback to "measure against nothing". Failing open there would turn one
+/// typo back into the silence this whole change closes.
+#[test]
+fn an_unreadable_as_of_day_fails_the_run_rather_than_disabling_the_check() {
+    let root = scratch_copy("staleness", "bad-as-of");
+    let _ = std::fs::write(root.join(".gate-as-of"), "next quarter\n");
+
+    let message = Config::load(&root)
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(
+        message.contains("`next quarter` is not a YYYY-MM-DD day"),
+        "{message}"
+    );
+    assert!(message.contains(".gate-as-of"), "{message}");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 fn read(root: &Path, relative: &str) -> String {
     std::fs::read_to_string(root.join(relative)).unwrap_or_default()
 }

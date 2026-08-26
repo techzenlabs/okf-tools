@@ -1,0 +1,17 @@
+# A bundle that has committed to a day, so `stale_after` means something.
+#
+# `.gate-as-of` beside this file is what the checker measures against. It is
+# committed rather than read from the clock, because this check runs inside a
+# nix derivation cached on its inputs and a verdict that reads the clock is
+# computed once and then served from cache forever. Pinning the day here is
+# also what keeps this fixture from becoming a clock-dependent gate of its
+# own: it asserts the same thing on every day it is ever run.
+config_version = 1
+okf_version = "0.2"
+bundle_root = "."
+title = "Staleness fixture"
+description = "stale_after measured against a committed day."
+max_warnings = 1000
+
+[vocabulary]
+extends = ["core", "engineering"]

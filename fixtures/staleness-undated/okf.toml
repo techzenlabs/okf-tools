@@ -1,0 +1,14 @@
+# A bundle whose documents promise staleness and whose repository has no
+# `.gate-as-of` to keep the promise against.
+#
+# This is the state the finding describes: a field that looks like it means
+# something and does nothing. There is deliberately no `.gate-as-of` here.
+config_version = 1
+okf_version = "0.2"
+bundle_root = "."
+title = "Unenforced staleness fixture"
+description = "stale_after with no day to measure it against."
+max_warnings = 1000
+
+[vocabulary]
+extends = ["core", "engineering"]

@@ -128,6 +128,81 @@ either enforcing or deleting it. One bundle set `keep_readme = false` while
 deleting every `README.md` by hand, and a reader of that config reasonably
 concluded the tool had done the retirement.
 
+### `stale_after`, and the day it is measured against
+
+`stale_after` is OKF v0.2's staleness slot. Until okf-tools#15 this tool
+checked its *shape* and nothing else, so a document could say
+`stale_after: 2020-01-01` and no gate anywhere would ever say so. That is the
+`keep_readme` defect one layer down, and worse, because the field is in the
+document vocabulary rather than in a config file: an author who writes it
+reasonably believes the page will be flagged when it lapses.
+
+It is now compared. What it is compared against is a file, not a clock:
+
+```sh
+echo 2026-08-25 > .gate-as-of     # repository root, beside okf.toml
+```
+
+`okf-check` reports three things, all warnings:
+
+| The document says | The bundle says | The warning |
+| --- | --- | --- |
+| `stale_after: soon` | anything | is not YYYY-MM-DD |
+| `stale_after: 2026-06-14` | no `.gate-as-of` | enforces nothing: this bundle has no `.gate-as-of` naming the day to measure it against |
+| `stale_after: 2026-06-14` | `.gate-as-of` holds `2026-06-15` | has passed (as of 2026-06-15) |
+
+Warnings rather than errors because §11 forbids a consumer rejecting a bundle
+over a key it does not like, and a review date that lapsed is a quality
+matter. `max_warnings` is what gives them teeth: a bundle records the count it
+adopted at, so a page going stale spends budget the bundle does not have and
+the gate goes red until somebody deals with it.
+
+The named day is the last good day. `stale_after: 2026-06-15` under
+`.gate-as-of` of `2026-06-15` is not stale, and `fixtures/staleness/boundary.md`
+is there so nobody can quietly change that.
+
+A bundle that sets none of this sees no new output at all. The unenforced
+warning fires per document that carries the field, so a bundle with no
+`stale_after` anywhere needs no `.gate-as-of` and is told nothing about it.
+That is every bundle in the estate today, which is what made shipping this
+safe.
+
+#### Why the day is committed rather than read from the clock
+
+`okf-check` runs inside a nix derivation cached on its inputs. A verdict that
+reads today's date is computed once and then served from cache: nothing in the
+repository changes, the answer changes anyway, and a green default branch
+stops being evidence that the check passes today. The red also lands on
+whoever next touches the derivation's inputs rather than on whoever let the
+date lapse. A sweep of this estate found that shape twenty-one times, four of
+which had already bitten somebody (mikeslade/dotfiles#202).
+
+So `.gate-as-of` is a tracked file, which makes it a real derivation input:
+the cache invalidates the day it moves and is honest the rest of the time. The
+cached green then says something checkable, "as of the day this bundle
+committed to, nothing had lapsed", rather than something about a build
+machine's calendar. Moving the day is a one-line diff whose gate is red if
+something lapsed, which is a reviewable change addressed to whoever owns the
+bump.
+
+Nothing in the crate reads a clock. `okf-check --as-of=2026-08-25` measures
+against a day you name without committing anything, which is how a person or a
+scheduled bump job asks what today would say:
+
+```sh
+okf-check --as-of="$(date -u +%F)"
+```
+
+A `.gate-as-of` that exists and does not hold a `YYYY-MM-DD` day fails the
+run rather than falling back to measuring against nothing. Failing open there
+would turn one typo back into the silence this closes.
+
+The field itself stays even though no bundle sets it yet. §11 forbids a
+consumer rejecting a bundle over an unknown key, so dropping the validation is
+not the same as dropping the field, and `stale_after` is in the v0.2 spec
+either way. A vocabulary slot that a consumer must tolerate and this tool
+ignores is the worst of the three options.
+
 ### The four vocabularies
 
 Composed per bundle by `extends`, so no bundle ever sees a list it cannot
