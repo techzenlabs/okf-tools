@@ -1,0 +1,24 @@
+# The public side of a promotion: a near-empty bundle grown only by review.
+#
+# Synthetic. Every name in this tree was invented for it: nothing here is
+# derived from a real bundle or imported from private history.
+config_version = 1
+okf_version = "0.2"
+bundle_root = "."
+title = "Promotion destination fixture"
+description = "A client-facing bundle that promoted pages are copied into."
+max_warnings = 0
+
+# Eleven names, and `Person` is not among them.
+[vocabulary]
+extends = ["core", "knowledge"]
+
+# okf-promote refuses to install into a bundle that has not turned these on.
+[confidentiality]
+closed_vocabulary = true
+links_stay_in_bundle = true
+owner_record = true
+
+[[promote.source]]
+repo = "example/promotion-source-fixture"
+path = "../source"

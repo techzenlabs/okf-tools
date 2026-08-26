@@ -300,6 +300,161 @@ fn strip_quotes(value: &str) -> String {
     value.to_owned()
 }
 
+/// The raw frontmatter block of `text`, fence excluded.
+///
+/// `None` when the file does not open with one.
+#[must_use]
+pub fn block(text: &str) -> Option<&str> {
+    FENCE_OPTIONAL_NL
+        .captures(text)
+        .and_then(|caps| caps.get(1))
+        .map(|m| m.as_str())
+}
+
+/// The lines indented under top-level `key`, with their 1-based file line
+/// numbers.
+///
+/// [`parse_strict`] is a YAML subset in which only column zero is a key, which
+/// is what keeps a nested mapping from being read as a top-level one. That is
+/// the right rule for conformance and the wrong one for two keys the
+/// confidentiality gates have to see inside: `owner` and `promoted_from`. This
+/// reads one level down, for those two and nothing else.
+#[must_use]
+pub fn nested_lines<'a>(text: &'a str, key: &str) -> Vec<(usize, &'a str)> {
+    let Some(body) = block(text) else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    let mut inside = false;
+    for (offset, raw) in body.split('\n').enumerate() {
+        let line = raw.strip_suffix('\r').unwrap_or(raw);
+        // The opening fence is line 1, so the first body line is line 2.
+        let n = offset.saturating_add(2);
+        if let Some(name) = KEY_LINE.captures(line).and_then(|c| c.get(1)) {
+            inside = name.as_str() == key;
+            continue;
+        }
+        if inside {
+            if line.trim().is_empty() {
+                continue;
+            }
+            if !line.starts_with(' ') && !line.starts_with('\t') {
+                inside = false;
+                continue;
+            }
+            lines.push((n, line));
+        }
+    }
+    lines
+}
+
+/// The flat `subkey: value` pairs one level under `key`.
+///
+/// Values are unquoted. A repeated subkey takes its last value, which matters
+/// nowhere the two callers use it and is stated so nobody has to guess.
+#[must_use]
+pub fn nested_map(text: &str, key: &str) -> BTreeMap<String, String> {
+    let mut map = BTreeMap::new();
+    for (_, line) in nested_lines(text, key) {
+        let trimmed = line.trim_start().trim_start_matches("- ").trim_start();
+        if let Some(caps) = KEY_LINE.captures(trimmed)
+            && let (Some(name), Some(value)) = (caps.get(1), caps.get(2))
+        {
+            map.insert(
+                name.as_str().to_owned(),
+                unquote(value.as_str().trim()).trim().to_owned(),
+            );
+        }
+    }
+    map
+}
+
+/// One subkey of a record, with the line it was written on.
+///
+/// The line is carried because the diagnostic that reads this points at a
+/// subkey somebody added, and pointing at the record instead would send them
+/// to the wrong line of their own file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Field {
+    pub line: usize,
+    pub name: String,
+    pub value: String,
+}
+
+/// One record of a block sequence of mappings under `key`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Record {
+    /// The file line the record opens on.
+    pub line: usize,
+    /// Its subkeys, in the order written, with values unquoted.
+    pub fields: Vec<Field>,
+}
+
+impl Record {
+    /// The value of `name`, or `None`.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.fields
+            .iter()
+            .find(|field| field.name == name)
+            .map(|field| field.value.as_str())
+    }
+}
+
+/// A block sequence of mappings under `key`, as
+/// `owner: [{name, title, email}, …]` is written.
+///
+/// A scalar `key: value` yields nothing, which is how the caller tells "no
+/// records" from "the wrong shape entirely": it checks the scalar itself.
+#[must_use]
+pub fn nested_records(text: &str, key: &str) -> Vec<Record> {
+    let mut records: Vec<Record> = Vec::new();
+    for (n, line) in nested_lines(text, key) {
+        let trimmed = line.trim_start();
+        let (starts, rest) = match trimmed.strip_prefix("- ") {
+            Some(rest) => (true, rest.trim_start()),
+            None => (false, trimmed),
+        };
+        if starts {
+            records.push(Record {
+                line: n,
+                fields: Vec::new(),
+            });
+        }
+        let Some(caps) = KEY_LINE.captures(rest) else {
+            continue;
+        };
+        let (Some(name), Some(value)) = (caps.get(1), caps.get(2)) else {
+            continue;
+        };
+        let Some(current) = records.last_mut() else {
+            continue;
+        };
+        current.fields.push(Field {
+            line: n,
+            name: name.as_str().to_owned(),
+            value: unquote(value.as_str().trim()).trim().to_owned(),
+        });
+    }
+    records
+}
+
+/// The items of a block sequence of scalars under `key`, with line numbers.
+///
+/// `sources:` is the one that matters: an entry naming a private path
+/// discloses exactly as a body link does, and it is not a link, so the link
+/// scanner would never see it.
+#[must_use]
+pub fn nested_items(text: &str, key: &str) -> Vec<(usize, String)> {
+    nested_lines(text, key)
+        .into_iter()
+        .filter_map(|(n, line)| {
+            let item = line.trim_start().strip_prefix("- ")?.trim();
+            (!item.is_empty()).then(|| (n, unquote(item).trim().to_owned()))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -378,6 +533,45 @@ mod tests {
     fn a_lone_quote_unquotes_differently_in_each_tool() {
         assert_eq!(unquote("\""), "\"");
         assert_eq!(unquote_lenient("\""), "");
+    }
+
+    #[test]
+    fn nested_reads_one_level_under_a_key_and_stops_at_the_next() {
+        let text = "---\ntype: System\nowner:\n  - name: \"A\"\n    title: \"T\"\n  - name: \"B\"\ntags:\n  - x\n---\n";
+        let records = nested_records(text, "owner");
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].get("name"), Some("A"));
+        assert_eq!(records[0].get("title"), Some("T"));
+        assert_eq!(records[1].get("name"), Some("B"));
+        assert_eq!(records[0].line, 4);
+        // Each subkey carries its own line, not the record's.
+        assert_eq!(records[0].fields[1].line, 5);
+        // `tags` belongs to the next key, not to `owner`.
+        assert!(records.iter().all(|r| r.get("x").is_none()));
+    }
+
+    #[test]
+    fn a_nested_mapping_reads_as_a_flat_map() {
+        let text =
+            "---\npromoted_from:\n  repo: \"e/n\"\n  path: \"a/b.md\"\n  rev: \"abc\"\n---\n";
+        let map = nested_map(text, "promoted_from");
+        assert_eq!(map.get("repo").map(String::as_str), Some("e/n"));
+        assert_eq!(map.get("rev").map(String::as_str), Some("abc"));
+    }
+
+    #[test]
+    fn a_scalar_key_has_no_records() {
+        let text = "---\nowner: someone\n---\n";
+        assert!(nested_records(text, "owner").is_empty());
+    }
+
+    #[test]
+    fn sequence_items_carry_their_line() {
+        let text =
+            "---\nsources:\n  - meetings/2026-01-01-x/summary.md\n  - https://example.test/\n---\n";
+        let items = nested_items(text, "sources");
+        assert_eq!(items[0], (3, "meetings/2026-01-01-x/summary.md".to_owned()));
+        assert_eq!(items[1].0, 4);
     }
 
     #[test]

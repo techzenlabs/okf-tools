@@ -19,8 +19,9 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::config::Config;
-use crate::frontmatter::{Frontmatter, ParseError, parse_strict, unquote};
+use crate::config::{Confidentiality, Config};
+use crate::frontmatter::{self, Frontmatter, ParseError, parse_strict, unquote};
+use crate::links::{self, Target};
 use crate::walk;
 
 #[expect(
@@ -117,13 +118,183 @@ pub fn check_bundle(root: &Path, config: &Config) -> Result<Report, crate::confi
                 check_index(&mut report, &name, &text, is_root, config);
             }
             Some("log.md") => check_log(&mut report, &name, &text),
-            _ => check_concept(&mut report, &name, &text, &types),
+            _ => check_concept(
+                &mut report,
+                &name,
+                &text,
+                &types,
+                config.confidentiality.closed_vocabulary,
+            ),
+        }
+
+        // The confidentiality rules run over every file, reserved names
+        // included: a hand-written root index carries links like any other
+        // page, and the gate exists for the page nobody thought to check.
+        if config.confidentiality.links_stay_in_bundle {
+            check_links(&mut report, &name, &text, root, &config.confidentiality);
+        }
+        if config.confidentiality.owner_record {
+            check_owner(&mut report, &name, &text);
         }
     }
     Ok(report)
 }
 
-fn check_concept(report: &mut Report, path: &str, text: &str, types: &BTreeSet<String>) {
+/// No link leaves the bundle.
+///
+/// Containment on its own would not catch the failure this exists for. A page
+/// hand-copied out of a private bundle keeps `../people/dana-quill.md`, and
+/// from `systems/` that resolves to `people/dana-quill.md`, which is *inside*
+/// the new bundle root and simply is not there. So the target has to exist,
+/// and a link to a file the bundle does not hold is the same error as a link
+/// that climbs out of it.
+fn check_links(report: &mut Report, path: &str, text: &str, root: &Path, conf: &Confidentiality) {
+    let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
+    let mut targets: Vec<(usize, String, &'static str, &str)> = links::links(text)
+        .into_iter()
+        .map(|link| (link.line, link.target, "link", dir))
+        .collect();
+    // A `sources` entry naming a private path discloses exactly as a body
+    // link does, and it is not a link, so the scanner above never sees it.
+    // Free prose in the list is left alone: an entry with a space in it is a
+    // citation somebody wrote, not a path. Entries are bundle-relative rather
+    // than page-relative: frontmatter is not prose, and a citation is written
+    // once wherever the page later moves to.
+    targets.extend(
+        frontmatter::nested_items(text, "sources")
+            .into_iter()
+            .filter(|(_, item)| item.split_whitespace().count() == 1)
+            .map(|(line, item)| (line, item, "sources entry", "")),
+    );
+    // File order, so a reader walks their own document rather than this
+    // function's two passes over it.
+    targets.sort_by_key(|(line, _, _, _)| *line);
+    for (line, raw, label, from) in &targets {
+        judge_target(report, path, root, conf, *line, raw, label, from);
+    }
+}
+
+/// Judge one target written on `path`, reporting it as `label`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "every one is a distinct fact about one finding, and a struct               here would be a parameter list with a name"
+)]
+fn judge_target(
+    report: &mut Report,
+    path: &str,
+    root: &Path,
+    conf: &Confidentiality,
+    line: usize,
+    raw: &str,
+    label: &str,
+    from: &str,
+) {
+    let target = links::classify(raw, from);
+    match &target {
+        Target::Fragment => {}
+        Target::Url { .. } => {
+            if !target.url_is_reachable(&conf.site_urls, raw) {
+                report.err(
+                    path,
+                    &format!("line {line}: {label} `{raw}` is not a URL this bundle may carry"),
+                );
+            }
+        }
+        Target::Escapes => report.err(
+            path,
+            &format!("line {line}: {label} `{raw}` leaves the bundle"),
+        ),
+        Target::Inside { path: inside } => {
+            if !root.join(inside).exists() {
+                report.err(
+                    path,
+                    &format!("line {line}: {label} `{raw}` has no target in this bundle"),
+                );
+            }
+        }
+    }
+}
+
+/// `owner` carries exactly `name`, `title` and `email`.
+///
+/// An error rather than a warning, and the only local convention in this tool
+/// that is one. The record is *constructed* from a source page's owner bullet
+/// cross-checked against a profile, never sliced out of the profile, and the
+/// schema is what keeps it from growing back toward one: a subkey that would
+/// hold an assessment has nowhere to go.
+fn check_owner(report: &mut Report, path: &str, text: &str) {
+    for (_, message) in owner_errors(text) {
+        report.err(path, &message);
+    }
+    for record in &frontmatter::nested_records(text, "owner") {
+        if record.get("title").unwrap_or_default().is_empty() {
+            let line = record.line;
+            report.warn(path, &format!("line {line}: owner record has no `title`"));
+        }
+    }
+}
+
+/// Everything wrong with a page's `owner` record, as (line, message).
+///
+/// Shared with `okf-promote`, which runs it over a hand-restated draft. A
+/// reviewer constructing an owner record by hand is exactly when a fourth
+/// subkey appears, and catching it at promotion beats catching it in the
+/// destination repository's build afterwards.
+///
+/// Errors only. A missing `title` is a quality matter and stays a warning of
+/// the checker's own; a subkey the schema does not have is the boundary.
+#[must_use]
+pub fn owner_errors(text: &str) -> Vec<(usize, String)> {
+    const PERMITTED: [&str; 3] = ["name", "title", "email"];
+
+    let Ok(fm) = parse_strict(text) else {
+        // Malformed frontmatter is already an error from the concept check.
+        return Vec::new();
+    };
+    let Some(raw) = fm.get("owner") else {
+        return Vec::new();
+    };
+    if !raw.trim().is_empty() {
+        return vec![(
+            0,
+            "owner must be a sequence of `- name:` records, not a scalar".to_owned(),
+        )];
+    }
+    let records = frontmatter::nested_records(text, "owner");
+    if records.is_empty() {
+        return vec![(
+            0,
+            "owner is present but holds no `- name:` record".to_owned(),
+        )];
+    }
+
+    let mut found = Vec::new();
+    for record in &records {
+        for field in &record.fields {
+            if !PERMITTED.contains(&field.name.as_str()) {
+                let (at, key) = (field.line, &field.name);
+                found.push((
+                    at,
+                    format!("line {at}: owner subkey `{key}` is not name, title or email"),
+                ));
+            }
+        }
+        if record.get("name").unwrap_or_default().is_empty() {
+            let line = record.line;
+            found.push((line, format!("line {line}: owner record has no `name`")));
+        }
+    }
+    found.sort_by_key(|(line, _)| *line);
+    found
+}
+
+fn check_concept(
+    report: &mut Report,
+    path: &str,
+    text: &str,
+    types: &BTreeSet<String>,
+    closed_vocabulary: bool,
+) {
     let fm = match parse_strict(text) {
         Ok(fm) => fm,
         Err(ParseError::NoFence) => {
@@ -144,10 +315,17 @@ fn check_concept(report: &mut Report, path: &str, text: &str, types: &BTreeSet<S
     if ctype.is_empty() {
         report.err(path, "frontmatter has no non-empty `type` (§11.2)");
     } else if !types.is_empty() && !types.contains(&ctype) {
-        report.warn(
-            path,
-            &format!("type `{ctype}` is not in the bundle vocabulary"),
-        );
+        // Everywhere else this is a warning, because §11 forbids a consumer
+        // rejecting a bundle over an unknown `type`. A bundle that closes its
+        // vocabulary is not a foreign consumer of itself: it has decided that
+        // `Person` is not a name it holds, and a person-shaped page arriving
+        // in it is a confidentiality failure rather than a vocabulary drift.
+        let message = format!("type `{ctype}` is not in the bundle vocabulary");
+        if closed_vocabulary {
+            report.err(path, &format!("{message} (closed by this bundle)"));
+        } else {
+            report.warn(path, &message);
+        }
     }
     if fm.get_unquoted("title").is_empty() {
         report.warn(path, "no `title` (recommended, §4.2)");
@@ -341,7 +519,7 @@ mod tests {
     fn concept(text: &str) -> Report {
         let mut report = Report::default();
         let types = ["Runbook".to_owned()].into_iter().collect();
-        check_concept(&mut report, "p.md", text, &types);
+        check_concept(&mut report, "p.md", text, &types, false);
         report
     }
 
@@ -391,6 +569,7 @@ mod tests {
             "p.md",
             "---\ntype: Attested Computation\ntitle: T\ndescription: D\n---\nb\n",
             &types,
+            false,
         );
         assert!(report.errors.is_empty());
         assert!(report.warnings.iter().any(|w| w.contains("§10.2")));
@@ -404,7 +583,87 @@ mod tests {
             "p.md",
             "---\ntype: Anything At All\ntitle: T\ndescription: D\n---\nb\n",
             &BTreeSet::new(),
+            false,
         );
+        assert!(report.warnings.is_empty());
+    }
+
+    #[test]
+    fn a_closed_vocabulary_turns_the_type_warning_into_an_error() {
+        let mut report = Report::default();
+        let types = ["System".to_owned()].into_iter().collect();
+        check_concept(
+            &mut report,
+            "people/dana.md",
+            "---\ntype: Person\ntitle: T\ndescription: D\n---\nb\n",
+            &types,
+            true,
+        );
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        assert_eq!(
+            report.errors,
+            [
+                "people/dana.md: type `Person` is not in the bundle vocabulary (closed by this bundle)"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_owner_subkey_outside_the_three_is_an_error() {
+        let mut report = Report::default();
+        check_owner(
+            &mut report,
+            "systems/press.md",
+            "---\ntype: System\nowner:\n  - name: \"A\"\n    title: \"T\"\n    notes: \"skeptical of the vendor\"\n---\nb\n",
+        );
+        assert_eq!(
+            report.errors,
+            ["systems/press.md: line 6: owner subkey `notes` is not name, title or email"]
+        );
+    }
+
+    #[test]
+    fn an_owner_record_needs_a_name_and_only_warns_without_a_title() {
+        let mut report = Report::default();
+        check_owner(
+            &mut report,
+            "p.md",
+            "---\nowner:\n  - title: \"T\"\n---\nb\n",
+        );
+        assert!(report.errors.iter().any(|e| e.contains("has no `name`")));
+        assert!(report.warnings.is_empty());
+
+        let mut report = Report::default();
+        check_owner(
+            &mut report,
+            "p.md",
+            "---\nowner:\n  - name: \"A\"\n---\nb\n",
+        );
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert!(report.warnings.iter().any(|w| w.contains("no `title`")));
+    }
+
+    #[test]
+    fn an_owner_that_is_not_a_sequence_of_records_is_refused() {
+        let mut report = Report::default();
+        check_owner(&mut report, "p.md", "---\nowner: Dana Quill\n---\nb\n");
+        assert!(report.errors.iter().any(|e| e.contains("not a scalar")));
+
+        let mut report = Report::default();
+        check_owner(&mut report, "p.md", "---\nowner:\ntype: System\n---\nb\n");
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("no `- name:` record"))
+        );
+    }
+
+    #[test]
+    fn a_page_with_no_owner_key_reports_nothing() {
+        let mut report = Report::default();
+        check_owner(&mut report, "p.md", "---\ntype: System\n---\nb\n");
+        assert!(report.errors.is_empty());
         assert!(report.warnings.is_empty());
     }
 

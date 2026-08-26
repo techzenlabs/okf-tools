@@ -27,6 +27,10 @@ path = "src/bin/okf-scan.rs"
 name = "okf-migrate"
 path = "src/bin/okf-migrate.rs"
 
+[[bin]]
+name = "okf-promote"
+path = "src/bin/okf-promote.rs"
+
 [dependencies]
 anyhow = "1"
 fancy-regex = "0.16"

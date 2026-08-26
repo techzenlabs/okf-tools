@@ -14,6 +14,9 @@ Commands:
 - `okf-assemble` turns a tenant manifest into a Hugo content tree.
 - `okf-scan` refuses to publish a tree carrying a key, a token or an
   identifier.
+- `okf-promote` copies a page from a private bundle into a client-facing one,
+  and refuses to write while any link would point somewhere the reader cannot
+  follow.
 
 ## What conformance means here, and what it does not
 
@@ -21,8 +24,8 @@ OKF §11 is three rules: parseable frontmatter on every non-reserved `.md`, a
 non-empty `type` in it, and `index.md` and `log.md` following §8 and §9. That
 is the whole of what `okf-check` treats as an error.
 
-Everything else it reports — vocabulary membership, the `human:`/`process:`
-actor form, ISO date shapes, a missing `title` — is a **warning**. A bundle
+Everything else it reports is a **warning**: vocabulary membership, the
+`human:`/`process:` actor form, ISO date shapes, a missing `title`. A bundle
 that trips all of them is still conformant, and a foreign consumer is
 unaffected. The split matters: §11 forbids a consumer rejecting a bundle for an
 unknown `type` or an unknown key, so a tool that errored on those would be
@@ -93,6 +96,11 @@ month_entry_glob = "summary*.md"
 paths = ["sources/vendor/docs"]
 title_strip = '\s*\|\s*Some Site\s*$'
 ```
+
+`[confidentiality]` and `[promote]` are documented under [Promotion, and the
+gates that go with it](#promotion-and-the-gates-that-go-with-it). Both default
+to inert, so a bundle that names neither behaves exactly as it did before they
+existed.
 
 ### The four vocabularies
 
@@ -217,6 +225,176 @@ The unformatted nine-digit rule is off by default. It fires on any nine
 adjacent digits, and in a repository full of commit hashes and pinned revisions
 that is mostly noise, so `--bare-9` turns it on where the corpus warrants it.
 This repository scans itself: `nix build .#checks.x86_64-linux.self-scan`.
+## Promotion, and the gates that go with it
+
+Some bundles are private notes and some are read by a client. `okf-promote`
+moves a page across that line, and three rules in `okf-check` keep it from
+being crossed by accident.
+
+Promotion **copies**. Nothing moves, nothing is deleted. The source page stays
+where it is, keeps every link that made it worth writing, and gains one key:
+
+```yaml
+promoted_to: "https://docs.example.test/knowledge/systems/quiet-mill"
+```
+
+The promoted page gains the reciprocal, recording the exact commit it came
+from:
+
+```yaml
+promoted_from:
+  repo: "example/notes"
+  path: "org/systems/quiet-mill.md"
+  rev: "6349f87cb344704da7923ae58b935c03fb0a04d9"
+```
+
+References run private to public and never the other way.
+
+### The refusal is the mechanism
+
+```sh
+okf-promote --propose org/systems/widget-press.md --to knowledge
+```
+
+reads the source, checks the routing table agrees that `knowledge` is where
+this page goes, drafts the page to stdout, and prints a **resolution report**
+to stderr: every link whose target the destination bundle does not hold, with
+the sentence it appears in and what to put there instead. It writes nothing
+while that report has an unresolved item, and exits 1. A tool that installed a
+page carrying an unresolved pointer into a profile directory would be worse
+than no tool, because it would make the disclosure look reviewed.
+
+Two classes of link get different advice, because they need different
+resolutions.
+
+A **profile link** resolves into a plain name, or into the page's `owner`
+record. A name in prose is contact identity and publishes. A link into a
+profile is a pointer at somebody's read on a person, and it does not.
+
+An **evidence link** resolves by restating the claim as a dated statement
+carrying its own Confirmed / Assumed / Needs-confirmation label, with the
+citation dropped. Keeping the link and marking it unreachable was considered
+and rejected: `meetings/2026-07-24-fax-report/summary.md` names a meeting, its
+date and its subject, and the raw-markdown publishing route emits that string
+whatever a rendered page does with the link.
+
+What no checker can see is characterisation. A sentence carrying a read on
+somebody is forbidden by the same rule that forbids the profile, and no pattern
+recognises it. The gate catches pointers, the reviewer catches
+characterisation, and the gate is the half that cannot be forgotten.
+
+`okf-promote --refresh` answers the question a person cannot answer by looking:
+has the source grown a pointer since this page was promoted? It redraws the
+draft from the source as it stands, reviews it, and reports the difference
+against the draft at the recorded commit. It does **not** install the redraw
+over the page. A promoted page is not a mechanical copy, its evidence was
+restated by hand, and overwriting it would delete exactly the work the gate
+exists to require. The only thing it writes is the new commit, and only when
+nothing new is unresolved.
+
+`okf-promote --drift` is the cheap scan: for every page carrying
+`promoted_from`, compare the recorded `rev` against the commit that touches
+that path now, and list the pages whose source has moved. It runs where both
+repositories are checked out, which is one person's machine and never a
+client's runner.
+
+### The three rules `okf-check` gains
+
+All three are **off by default**, and that is not timidity. §11 forbids a
+consumer rejecting a bundle over an unknown `type` or an unknown key, so a
+checker that errored on those unasked would be the non-conformant one. A bundle
+opts in because the convention it is buying is a confidentiality boundary
+rather than a style preference:
+
+```toml
+[confidentiality]
+closed_vocabulary = true      # an unknown `type` is an error, not a warning
+links_stay_in_bundle = true   # a link the bundle cannot resolve is an error
+owner_record = true           # `owner` carries name, title, email, nothing else
+site_urls = ["https://docs.example.test/"]   # empty means any http(s) URL passes
+```
+
+**No link leaves the bundle.** Containment on its own would not catch the
+failure this exists for. A page hand-copied out of a private bundle keeps
+`../people/dana-quill.md`, and from `systems/` that resolves to
+`people/dana-quill.md`, which is *inside* the new bundle root and simply is not
+there. So the target has to exist, and a link to a file the bundle does not
+hold is the same error as a link that climbs out of it. `sources` entries are
+checked too, resolved against the bundle root, because a frontmatter citation
+discloses exactly as a body link does and is not a link.
+
+**`owner` carries exactly `name`, `title` and `email`.** A list, because a
+system routinely has both a business owner and a technical one. Any other
+subkey is an error. The record is constructed from a source page's owner bullet
+cross-checked against a profile, never sliced out of the profile, and the
+schema is what keeps it from growing back into one. A prose convention saying
+"do not put an assessment here" is a convention. A record with nowhere to grow
+is a boundary. `okf-promote` runs the same schema over a hand-restated draft,
+because a reviewer building an owner record by hand is exactly when a fourth
+subkey appears.
+
+```yaml
+owner:
+  - name: "Dana Quill"
+    title: "Director of Operations"
+    email: "dana.quill@example.test"   # optional; the site renders a mailto:
+  - name: "Ari Vaughn"
+    title: "Platform Lead"
+```
+
+**A closed vocabulary where a bundle declares one.** `extends = ["core",
+"knowledge"]` gives eleven names and `Person` is not among them, so a
+person-shaped page fails the type check outright rather than joining the
+warnings somebody meant to get to.
+
+A consumer needs no new flake wiring for any of this: `checks.okf-conformance`
+already runs `okf-check`, which already reads `okf.toml`.
+
+### Routing, which is data
+
+A page about a system that has a repository belongs beside that repository's
+code, so that a code change and a doc change land in one commit and one review.
+No tool can work out which systems those are, so the routing table is written
+down, and `--to` naming a different bundle than the route is a refusal rather
+than a preference. First match wins, so a page named explicitly beats the shape
+that would otherwise sweep it up.
+
+```toml
+[promote]
+profile_prefixes = ["org/people"]                   # the interpretive layer
+evidence_prefixes = ["meetings", "emails", "chats"] # the raw record
+
+[[promote.destination]]
+name = "knowledge"
+path = "../knowledge"                       # relative to this repository's root
+url = "https://docs.example.test/knowledge" # joined to give `promoted_to`
+
+[[promote.route]]
+from = "org/systems/quiet-mill.md"
+to = "the-mill-repo"
+into = "docs/systems"
+
+[[promote.route]]
+from = "org/systems/*.md"
+to = "knowledge"
+into = "systems"
+
+[[promote.source]]      # in the *destination* bundle, for --refresh and --drift
+repo = "example/notes"
+path = "../notes"
+```
+
+`okf-promote` also refuses to install into a destination whose `okf.toml` has
+not turned all three confidentiality rules on. Off by default must not come to
+mean forgotten.
+
+### Watching the gates fail
+
+`fixtures/confidentiality/` and `fixtures/promotion/` are synthetic bundles
+whose pages exist to fail. `cargo test` asserts the exact diagnostic each one
+produces, so a rule that stops firing breaks a test rather than quietly
+passing a page. Run `okf-check` inside `fixtures/confidentiality` to watch
+seven errors, one per way out of the bundle.
 
 ## Prior art
 
@@ -230,9 +408,9 @@ scale.
 Approaches were read from the public ecosystem before any of this was written.
 [`cwest/okfctl`](https://github.com/cwest/okfctl) (Apache-2.0) splits
 `validate`, which enforces the spec floor, from `lint`, which reports and does
-not gate — the same conformance-versus-policy line this tool draws, reached
-independently, and the strongest signal in the survey that the line sits in the
-right place. [`thisismydesign/okf-lint`](https://github.com/thisismydesign/okf-lint)
+not gate. That is the same conformance-versus-policy line this tool draws,
+reached independently, and the strongest signal in the survey that the line
+sits in the right place. [`thisismydesign/okf-lint`](https://github.com/thisismydesign/okf-lint)
 (MIT) and [`serradura/okf-gem`](https://github.com/serradura/okf-gem)
 (Apache-2.0) were also read. None is a dependency: these are single-maintainer
 projects against a young spec, and this is load-bearing infrastructure where a

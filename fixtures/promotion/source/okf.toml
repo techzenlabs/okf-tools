@@ -1,0 +1,33 @@
+# The private side of a promotion: notes that never publish.
+#
+# Synthetic. Every name in this tree was invented for it: nothing here is
+# derived from a real bundle or imported from private history.
+config_version = 1
+okf_version = "0.2"
+bundle_root = "."
+title = "Promotion source fixture"
+description = "A private bundle, of the shape promotion copies out of."
+
+[vocabulary]
+extends = ["core", "capture", "knowledge"]
+
+[promote]
+profile_prefixes = ["org/people"]
+evidence_prefixes = ["meetings"]
+
+[[promote.destination]]
+name = "fixture-knowledge"
+path = "../destination"
+url = "https://docs.example.test/knowledge"
+
+# First match wins, so the page that belongs beside code is named above the
+# shape that would otherwise sweep it into the knowledge bundle.
+[[promote.route]]
+from = "org/systems/repo-owned-mill.md"
+to = "fixture-code-repo"
+into = "docs/systems"
+
+[[promote.route]]
+from = "org/systems/*.md"
+to = "fixture-knowledge"
+into = "systems"
