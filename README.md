@@ -16,6 +16,8 @@ Commands:
 - `okf-assemble` turns a tenant manifest into a Hugo content tree.
 - `okf-scan` refuses to publish a tree carrying a key, a token or an
   identifier.
+- `okf-serve` serves an assembled site, and refuses to serve it at all when
+  the identity header a deployment requires is absent.
 - `okf-promote` copies a page from a private bundle into a client-facing one,
   and refuses to write while any link would point somewhere the reader cannot
   follow.
@@ -454,6 +456,47 @@ detector its own documentation trips is a detector somebody excludes a file
 from. `src/scan.rs` carries it, escaped, where the rule is.
 
 This repository scans itself: `nix build .#checks.x86_64-linux.self-scan`.
+### `okf-serve`
+
+```sh
+okf-serve --root ./public --bind 100.64.0.1 --port 8080
+okf-serve --root ./public --require-header X-MS-CLIENT-PRINCIPAL
+```
+
+**Behind a proxy is not a posture. Refusing to serve without proxy-injected
+identity is.** A site that merely sits behind Entra's Easy Auth is bypassable
+the moment its origin is reachable, and an origin is reachable more often than
+anyone plans: a private endpoint misconfigured, a slot swapped, a `$web`
+container switched on by somebody adding a storage account. `--require-header`
+makes an unauthenticated request fail because *this process* refuses it, so
+the access-matrix probe tests a property of the build rather than of a setting.
+
+The three tailnet tenants run the same binary with no flag, because there the
+bind address is the boundary and there is no proxy to inject anything. One
+binary, two deployments, and the difference is a flag somebody can read in a
+unit file.
+
+Three properties beyond serving files, each with a test that was watched
+failing:
+
+- **The header check runs before anything touches the filesystem.** An
+  unauthenticated request never resolves a path.
+- **A directory is never a listing.** It resolves to its `index.html` or to
+  404. `okf-assemble` writes an `_index.md` for every section, so a directory
+  with no `index.html` is a build that went wrong, and naming its contents to
+  a reader is not how to say so.
+- **A path that tried to leave the root gets the same answer as a missing
+  one.** Containment is asserted twice: `..` textually, and again after
+  canonicalising, because a symlink inside the tree pointing out of it does
+  not contain the string `..`.
+
+A missing path gets the site's own `/404.html` with a 404 status when the
+build produced one. A root that is not a directory is a startup failure, not a
+site that answers 404 to everything and looks deployed.
+
+It is not an internet-facing web server, and the header refusal plus those
+three properties is the whole of its security argument.
+
 ## Promotion, and the gates that go with it
 
 Some bundles are private notes and some are read by a client. `okf-promote`
