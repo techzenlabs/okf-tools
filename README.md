@@ -763,6 +763,35 @@ restatement tests fail; with `owner_domains` and `owner_orgs` ignored, both
 owner tests fail; with `verified` left in the kept keys, the attestation
 travels and its test fails.
 
+## What checks this repository
+
+Nine derivations, and CI builds each one **by name**:
+
+| check | what it holds |
+|---|---|
+| `okf-tools` | the library, its tests, clippy under `pedantic` + `deny`, rustfmt |
+| `site-pipeline` | assemble, scan, render and index the fixture tenant, then read the output with a parser |
+| `section-collision` | a page beside a same-named directory is refused |
+| `leaf-bundle-rename` | an `index.md` is renamed rather than silently dropped |
+| `pinned-commit` | the manifest's rev is the one that gets built |
+| `scan-negative-control` | `okf-scan` is watched failing on a planted fixture before any clean run is accepted |
+| `self-scan` | this repository is public, so it scans itself |
+| `layout-fork` | a tenant may not track a shared layout, or fail to ignore one |
+| `workflow` | actionlint over the workflow, because the workflow cannot yet be verified by running |
+
+**By name, not `nix flake check`.** That command evaluates, and a derivation
+already in the store or the cache is reported as checked without being run.
+Twenty-two instances of that failure mode are inventoried in
+`mikeslade/dotfiles#202`, and the ones that pass vacuously are worse than the
+ones that turn red.
+
+`.github/workflows/check.yml` runs all nine on the estate's self-hosted fleet.
+**It cannot run until that fleet's app allowlists this repository** — hosted
+Actions on this org return a red X in two seconds without executing a line,
+which is a billing state rather than a configuration. Until then the workflow
+is verified the only way available: statically, in the `workflow` derivation,
+on every branch.
+
 ## Prior art
 
 `okf-check` and `okf-index` are a port of two Python scripts, not a rewrite,

@@ -1,0 +1,6 @@
+# The self-hosted fleet's label, declared so actionlint stops reading it as a
+# typo for a hosted runner. Default labels are disabled on that fleet, so a job
+# matches by naming this and nothing else.
+self-hosted-runner:
+  labels:
+    - ria-fleet
