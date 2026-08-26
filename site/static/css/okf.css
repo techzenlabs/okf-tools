@@ -53,13 +53,45 @@ h1, h2, h3 { line-height: 1.25; }
 .okf-home { font-weight: 600; text-decoration: none; }
 .okf-local { color: var(--okf-muted); }
 .okf-description { color: var(--okf-muted); }
+.okf-empty { color: var(--okf-muted); }
 
+/* The breadcrumb gets its own line under the header rather than a place in
+   it. Seven levels deep on a phone the trail is wider than the viewport, and
+   wrapping a second line is better than truncating a reader's only way up. */
+.okf-crumb {
+  border-block-end: 1px solid var(--okf-rule);
+  padding: 0.4rem 0;
+  font-size: 0.85rem;
+}
+
+.okf-crumb ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.okf-crumb a { color: var(--okf-muted); text-decoration: none; }
+.okf-crumb a:hover,
+.okf-crumb a:focus { color: var(--okf-link); text-decoration: underline; }
+.okf-crumb li + li::before {
+  content: "/";
+  margin-inline-end: 0.45rem;
+  color: var(--okf-rule);
+}
+
+/* Below the content, not above it: these are reference values a reader
+   consults after deciding the page is relevant, and rendered first they read
+   as a warning banner. Same judgement the footer already makes. */
 .okf-facets {
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem 0.75rem;
-  margin: 0.75rem 0 1.5rem;
-  padding: 0;
+  margin: 2.5rem 0 0;
+  border-block-start: 1px solid var(--okf-rule);
+  padding: 0.75rem 0 0;
   font-size: 0.8rem;
   color: var(--okf-muted);
 }
@@ -67,6 +99,30 @@ h1, h2, h3 { line-height: 1.25; }
 .okf-facets dt { font-variant: small-caps; }
 .okf-facets dt::after { content: ":"; }
 .okf-facets dd { margin: 0; }
+
+/* A listing entry is a title and at most two lines of summary. Descriptions
+   in this estate were derived from lead paragraphs, so they run to paragraph
+   length and truncate mid-sentence; unclamped, one entry was four lines tall
+   and 704 of them were fifty thousand pixels. The full text is one click
+   away, which is what makes clamping honest here. */
+.okf-listing li { margin-block-end: 0.4rem; }
+
+.okf-summary {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  margin: 0.1rem 0 0;
+  color: var(--okf-muted);
+  font-size: 0.9rem;
+}
+
+.okf-summary mark {
+  background: none;
+  color: var(--okf-fg);
+  font-weight: 600;
+}
 
 .okf-search input {
   width: 100%;

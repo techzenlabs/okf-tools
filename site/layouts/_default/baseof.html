@@ -8,6 +8,10 @@
     bare fragment template, so the shell is what makes search work at all.
   * `data-pagefind-body` on the content region, so search results point at
     the document rather than at the navigation that surrounds it.
+  * The facets *after* the content block, not before it. Rendered first they
+    put "TRUST: unverified" above the H1 on every page in the estate, where a
+    search facet reads as a warning banner; and Pagefind's excerpt led with
+    those words on every hit.
   * The mermaid `<script>` at the end of `<body>`, never in `<head>`. The
     render hook sets its flag while the content block renders, so a `<head>`
     read of that flag sees nothing — measured with both placements in one
@@ -23,7 +27,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     {{- $title := partial "okf-meta.html" (dict "page" . "region" "title") }}
-    <title>{{ with $title }}{{ . }} &middot; {{ end }}{{ site.Title }}</title>
+    {{- /* The home page's own title *is* the site title, so the middot is
+           guarded rather than emitted twice. */ -}}
+    <title>{{ with $title }}{{ if ne . site.Title }}{{ . }} &middot; {{ end }}{{ end }}{{ site.Title }}</title>
     {{- with .Params.description }}
     <meta name="description" content="{{ . }}" />
     {{- end }}
@@ -35,12 +41,18 @@
   <body>
     <header class="okf-header">
       <a class="okf-home" href="{{ "/" | relURL }}">{{ site.Title }}</a>
-      {{- partial "okf-meta.html" (dict "page" . "region" "breadcrumb") }}
     </header>
+    {{- /* A second quiet line under the header, not a fight for the header
+           row: seven levels deep the trail wraps, and wrapping is fine. */}}
+    {{- partial "okf-meta.html" (dict "page" . "region" "breadcrumb") }}
 
     <main data-pagefind-body>
-      {{- partial "okf-meta.html" (dict "page" . "region" "facets") }}
       {{ block "main" . }}{{ end }}
+      {{- /* Every page but the one that is not a page: trust and staleness
+             are claims about a document, and the 404 has none. */}}
+      {{- if ne .Kind "404" }}
+      {{- partial "okf-meta.html" (dict "page" . "region" "facets") }}
+      {{- end }}
     </main>
 
     <footer class="okf-footer">

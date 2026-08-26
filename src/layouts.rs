@@ -26,11 +26,15 @@ pub struct SharedFile {
     pub contents: &'static str,
 }
 
-/// The ten layout files every tenant renders through.
+/// The eleven layout files every tenant renders through.
 pub const LAYOUTS: &[SharedFile] = &[
     SharedFile {
         path: "layouts/_default/baseof.html",
         contents: include_str!("../site/layouts/_default/baseof.html"),
+    },
+    SharedFile {
+        path: "layouts/404.html",
+        contents: include_str!("../site/layouts/404.html"),
     },
     SharedFile {
         path: "layouts/_default/single.html",
@@ -119,14 +123,14 @@ pub fn forked<'a>(tracked: impl IntoIterator<Item = &'a str>) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// Ten layouts, and the count is asserted because the set is a contract:
-    /// a file added here has to be added to the gate's list in the same edit,
-    /// or a tenant could fork the new one and nothing would say so.
+    /// Eleven layouts, and the count is asserted because the set is a
+    /// contract: a file added here has to be added to the gate's list in the
+    /// same edit, or a tenant could fork the new one and nothing would say so.
     #[test]
-    fn the_shared_set_is_ten_layouts_and_two_siblings() {
-        assert_eq!(LAYOUTS.len(), 10);
+    fn the_shared_set_is_eleven_layouts_and_two_siblings() {
+        assert_eq!(LAYOUTS.len(), 11);
         assert_eq!(SHARED.len(), 2);
-        assert_eq!(owned_paths().len(), 12);
+        assert_eq!(owned_paths().len(), 13);
     }
 
     #[test]

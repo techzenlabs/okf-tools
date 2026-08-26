@@ -48,10 +48,10 @@ fn assemble_fixture(label: &str) -> (PathBuf, assemble::Outcome) {
 fn assembly_renames_every_index_and_lands_the_shared_files() {
     let (root, outcome) = assemble_fixture("assemble");
     assert_eq!(outcome.bundles, 2);
-    assert_eq!(outcome.files, 13);
-    // Six `index.md` across the two bundles, and not one survives under that
+    assert_eq!(outcome.files, 17);
+    // Eight `index.md` across the two bundles, and not one survives under that
     // name: Hugo would read each of their directories as a leaf bundle.
-    assert_eq!(outcome.renamed, 6);
+    assert_eq!(outcome.renamed, 8);
     assert_eq!(outcome.local, ["alpha", "beta"]);
 
     for path in [
@@ -60,6 +60,10 @@ fn assembly_renames_every_index_and_lands_the_shared_files() {
         "content/alpha/runbooks/_index.md",
         "content/alpha/Documentation/_index.md",
         "content/beta/notes/_index.md",
+        // Two levels of titleless section, which is what the breadcrumb has
+        // to name from directory names alone.
+        "content/alpha/archive/_index.md",
+        "content/alpha/archive/2026/_index.md",
     ] {
         assert!(root.join(path).is_file(), "missing {path}");
     }

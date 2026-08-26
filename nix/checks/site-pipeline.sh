@@ -63,6 +63,19 @@ fi
 grep -q 'class="chroma"' "$diagram" ||
   fail "the sql fence was not highlighted at build time"
 
-# 6. GroupBy returns group objects, not a map, and groups across every mounted
-#    bundle at once because Hugo's reserved `type` field is OKF's `type`.
+# 6. The 404 page. Measured with the layout removed: Hugo publishes no
+#    `public/404.html` at all, and `hugo server` answers a missing path with
+#    its own browser-default serif page carrying no stylesheet and no link
+#    anywhere. Neither fails a build, so this gate is what notices.
+test -f public/404.html || fail "hugo wrote no 404 page"
+grep -q 'css/okf.css' public/404.html || fail "the 404 page does not load the stylesheet"
+grep -q 'okf-home' public/404.html || fail "the 404 page offers no way back to the site"
+if grep -q 'okf-facets' public/404.html; then
+  fail "the 404 page carries trust metadata about a document that does not exist"
+fi
+
+# 7. GroupBy returns group objects, not a map, and groups across every mounted
+#    bundle at once because Hugo's reserved `type` field is OKF's `type`. That
+#    one, the breadcrumb, the listing markup and the index hygiene need
+#    structured reads rather than greps.
 python3 "$ASSERTIONS" "$site"

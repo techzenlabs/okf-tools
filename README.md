@@ -285,7 +285,7 @@ knowledge repositories carry byte-identical frozen copies of a script whose
 upstream fix never reached them. A forked Hugo layout would be worse, since a
 layout bug is invisible until somebody reads a page.
 
-So `okf-tools` owns the ten layout files, the stylesheet and the `justfile`,
+So `okf-tools` owns the eleven layout files, the stylesheet and the `justfile`,
 and `okf-assemble` writes them into the site tree on every build. A tenant
 repository tracks its `site.toml`, its deploy configuration and nothing that
 `okf-check --layouts` names.

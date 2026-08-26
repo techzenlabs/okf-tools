@@ -4,8 +4,9 @@
   Called with a `region`, because the three callers need three shapes and
   §5.3's trust rule must have exactly one definition:
 
-    breadcrumb  a parent link, outside the indexed region
-    facets      the `data-pagefind-filter` block, inside `data-pagefind-body`
+    breadcrumb  the ancestor trail, outside the indexed region
+    facets      the `data-pagefind-filter` block, ignored by the indexer
+    summary     the description, rendered as markdown and only as markdown
     trust       the tier alone, which `index.json` reads back as a string
     title       a display title, including for a page that has no `title`
 
@@ -13,13 +14,35 @@
   only at the bundle root, so *every* section listing in a conformant bundle
   arrives with no `title` key at all and Hugo reports an empty one. Falling
   back to the humanised directory name is what stops every section in the
-  estate rendering as a blank heading.
+  estate rendering as a blank heading, and it is what the breadcrumb renders
+  each of its crumbs through: a trail built from `.Title` alone is a row of
+  anchors with nothing inside them, which is invisible rather than wrong.
+
+  `humanize` ordinalises a numeric string, so an `archive/2026/` directory
+  came out as "2026th" in the browser tab. Digits are returned unchanged.
 
   The tier is derived and never stored. No `verified` at all is unverified; a
   `verified` entry whose actor is not a `human:` one is machine-confirmed; a
   `human:<id>` actor is human-reviewed. Deriving it means no document carries
   the tier twice and free to drift, and a reader filtering search to
   human-reviewed pages is the whole reason the field exists.
+
+  The facets block is inside `data-pagefind-body` and carries
+  `data-pagefind-ignore`, which is not a contradiction: Pagefind still reads
+  `data-pagefind-filter` inside an ignored element, so the filters reach the
+  index while the words do not. Without it every page's indexed text began
+  "trust unverified", so searching for "unverified" matched the whole estate
+  and every excerpt led with boilerplate.
+
+  A description is markdown, and rendering it as plain text put literal
+  backticks on the front page of a corpus that writes ``Status: `Active` ``.
+  It is markdown and nothing else, though: documents render with
+  `unsafe = true`, so a description beginning `</ul>` reached the page as raw
+  HTML and closed the listing that held it — measured, not guessed. Every `<`
+  is parked on a private-use code point across the markdown pass and comes
+  back as an entity, so a code span containing `<div>` still renders and no
+  description can emit a tag. §11 again: the answer to an awkward value is to
+  render it, not to reject the bundle that carries it.
 
   Every read is `with`-guarded or normalised first. OKF §11 forbids a consumer
   rejecting a bundle for a missing optional field or an unexpected shape, so a
@@ -29,6 +52,7 @@
 */ -}}
 {{- $page := .page -}}
 {{- $region := .region -}}
+{{- $class := or .class "okf-summary" -}}
 {{- $trust := "unverified" -}}
 {{- with $page.Params.verified -}}
   {{- $trust = "machine-confirmed" -}}
@@ -43,11 +67,39 @@
 {{- if eq $region "trust" -}}
 {{- $trust -}}
 {{- else if eq $region "title" -}}
-{{- or $page.Title (humanize (path.Base $page.RelPermalink)) -}}
+{{- $display := $page.Title -}}
+{{- if not $display -}}
+  {{- /* `humanize ""` is a panic, not an empty string, and a site with no
+         title reaches this with an empty base. Measured. */ -}}
+  {{- $base := strings.Trim (path.Base $page.RelPermalink) "/" -}}
+  {{- if findRE "^[0-9]+$" $base -}}
+    {{- $display = $base -}}
+  {{- else if $base -}}
+    {{- $display = humanize $base -}}
+  {{- end -}}
+{{- end -}}
+{{- $display -}}
+{{- else if eq $region "summary" -}}
+  {{- with $page.Params.description -}}
+    {{- $parked := replaceRE "<" "\ue000" (printf "%v" .) | markdownify -}}
+    <p class="{{ $class }}">{{ replaceRE "\ue000" "&lt;" $parked | safeHTML }}</p>
+  {{- end -}}
 {{- else if eq $region "breadcrumb" -}}
-  {{- with $page.Parent }}<nav class="okf-crumb"><a href="{{ .RelPermalink }}">{{ .Title }}</a></nav>{{ end -}}
+  {{- $crumbs := slice -}}
+  {{- range $page.Ancestors.Reverse -}}
+    {{- if not .IsHome -}}{{- $crumbs = $crumbs | append . -}}{{- end -}}
+  {{- end -}}
+  {{- with $crumbs }}
+  <nav class="okf-crumb" aria-label="Breadcrumb">
+    <ol>
+      {{- range . }}
+      <li><a href="{{ .RelPermalink }}">{{ partial "okf-meta.html" (dict "page" . "region" "title") }}</a></li>
+      {{- end }}
+    </ol>
+  </nav>
+  {{- end -}}
 {{- else -}}
-  <dl class="okf-facets">
+  <dl class="okf-facets" data-pagefind-ignore>
     {{- with $page.Params.type }}
     <dt>type</dt>
     <dd><span data-pagefind-filter="type">{{ . }}</span></dd>
