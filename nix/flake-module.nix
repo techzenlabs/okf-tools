@@ -21,6 +21,13 @@
       # OKF v0.2 conformance (§11): parseable frontmatter and a non-empty
       # `type` on every concept document, §8/§9 structure for the reserved
       # index.md and log.md filenames.
+      #
+      # `${self}` is the consumer's whole source tree, so a `.gate-as-of` at
+      # its root is an input to this derivation like every other tracked file.
+      # That is what keeps the `stale_after` comparison honest under caching:
+      # the day is data the repository commits, the cache invalidates when the
+      # day moves, and no verdict here reads the build machine's clock. See
+      # the README section on `stale_after`.
       okf-conformance =
         pkgs.runCommand "okf-conformance" {} ''
           cd ${self}

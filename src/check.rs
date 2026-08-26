@@ -22,6 +22,7 @@ use regex::Regex;
 use crate::config::{Confidentiality, Config};
 use crate::frontmatter::{self, Frontmatter, ParseError, parse_strict, unquote};
 use crate::links::{self, Target};
+use crate::staleness::Day;
 use crate::walk;
 
 #[expect(
@@ -35,6 +36,12 @@ fn compiled(pattern: &str) -> Regex {
 /// §7's actor form: `human:<id>`, `process:<id>` or `<producer>/<version>`.
 static ACTOR: LazyLock<Regex> =
     LazyLock::new(|| compiled(r"^(human:[\w.\-]+|process:[\w.\-]+|[\w.\-]+/[\w.:\-]+)$"));
+/// §9's log heading shape, and only that.
+///
+/// Deliberately not [`crate::staleness::Day`], which range-checks the month
+/// and the day: this pattern is what the Python emitted an error from, the
+/// parity run compared those errors, and tightening it would fail a bundle
+/// over a heading that has nothing to do with staleness.
 static ISO_DATE: LazyLock<Regex> = LazyLock::new(|| compiled(r"^\d{4}-\d{2}-\d{2}$"));
 static ISO_DATETIME: LazyLock<Regex> =
     LazyLock::new(|| compiled(r"^\d{4}-\d{2}-\d{2}([T ][\d:.]+(Z|[+-]\d{2}:?\d{2})?)?$"));
@@ -124,6 +131,7 @@ pub fn check_bundle(root: &Path, config: &Config) -> Result<Report, crate::confi
                 &text,
                 &types,
                 config.confidentiality.closed_vocabulary,
+                config.as_of.as_ref(),
             ),
         }
 
@@ -298,6 +306,7 @@ fn check_concept(
     text: &str,
     types: &BTreeSet<String>,
     closed_vocabulary: bool,
+    as_of: Option<&Day>,
 ) {
     let fm = match parse_strict(text) {
         Ok(fm) => fm,
@@ -344,7 +353,7 @@ fn check_concept(
             "type `Attested Computation` has no `runtime` (required for this type, §10.2)",
         );
     }
-    check_trust(report, path, &fm);
+    check_trust(report, path, &fm, as_of);
 }
 
 /// §13's two breaking changes, as a guard against reintroduction.
@@ -366,8 +375,12 @@ fn check_v01_guards(report: &mut Report, path: &str, text: &str, fm: &Frontmatte
     }
 }
 
-/// `generated` / `verified` actor and timestamp form (§5, §6).
-fn check_trust(report: &mut Report, path: &str, fm: &Frontmatter) {
+/// The frontmatter this tool reports on beyond §11: `generated` / `verified`
+/// actor and timestamp form (§5, §6), `stale_after`, and `status`.
+///
+/// One function because the order it emits in is the order a reader sees, and
+/// that order is part of what the parity run compared.
+fn check_trust(report: &mut Report, path: &str, fm: &Frontmatter, as_of: Option<&Day>) {
     for field in ["generated", "verified"] {
         let raw = fm.get(field).unwrap_or_default();
         if raw.is_empty() {
@@ -395,10 +408,8 @@ fn check_trust(report: &mut Report, path: &str, fm: &Frontmatter) {
             }
         }
     }
-    if let Some(raw) = fm.get("stale_after")
-        && !ISO_DATE.is_match(&unquote(raw))
-    {
-        report.warn(path, &format!("stale_after `{raw}` is not YYYY-MM-DD"));
+    if let Some(raw) = fm.get("stale_after") {
+        check_stale_after(report, path, raw, as_of);
     }
     if let Some(raw) = fm.get("status") {
         let value = unquote(raw);
@@ -408,6 +419,47 @@ fn check_trust(report: &mut Report, path: &str, fm: &Frontmatter) {
                 &format!("status `{raw}` is not draft/stable/deprecated"),
             );
         }
+    }
+}
+
+/// Is this document past the day it said it was good until?
+///
+/// Three outcomes, and the middle one is the point of the change. A value
+/// that is not a day is the shape warning this field has always produced. A
+/// day with nothing to measure it against is a promise the bundle cannot
+/// keep, and saying so on the document is how the author of that promise
+/// finds out. A day that has passed is the diagnostic the field was always
+/// supposed to produce and never did.
+///
+/// All three are warnings. §11 forbids a consumer rejecting a bundle over a
+/// key it does not like, and a lapsed review date is a quality matter rather
+/// than a conformance one. `max_warnings` is what gives them teeth: a bundle
+/// records the count it adopted at, so a document going stale spends budget
+/// the bundle does not have and the gate goes red until somebody deals with
+/// it.
+///
+/// `as_of` is a parameter rather than a clock read. See [`crate::staleness`].
+fn check_stale_after(report: &mut Report, path: &str, raw: &str, as_of: Option<&Day>) {
+    let Some(stale_after) = Day::parse(&unquote(raw)) else {
+        report.warn(path, &format!("stale_after `{raw}` is not YYYY-MM-DD"));
+        return;
+    };
+    let Some(as_of) = as_of else {
+        report.warn(
+            path,
+            &format!(
+                "stale_after `{stale_after}` enforces nothing: this bundle has no \
+                 `{file}` naming the day to measure it against",
+                file = crate::staleness::AS_OF_FILE
+            ),
+        );
+        return;
+    };
+    if stale_after.has_passed(as_of) {
+        report.warn(
+            path,
+            &format!("stale_after `{stale_after}` has passed (as of {as_of})"),
+        );
     }
 }
 
@@ -549,7 +601,7 @@ mod tests {
     fn concept(text: &str) -> Report {
         let mut report = Report::default();
         let types = ["Runbook".to_owned()].into_iter().collect();
-        check_concept(&mut report, "p.md", text, &types, false);
+        check_concept(&mut report, "p.md", text, &types, false, None);
         report
     }
 
@@ -600,6 +652,7 @@ mod tests {
             "---\ntype: Attested Computation\ntitle: T\ndescription: D\n---\nb\n",
             &types,
             false,
+            None,
         );
         assert!(report.errors.is_empty());
         assert!(report.warnings.iter().any(|w| w.contains("§10.2")));
@@ -614,6 +667,7 @@ mod tests {
             "---\ntype: Anything At All\ntitle: T\ndescription: D\n---\nb\n",
             &BTreeSet::new(),
             false,
+            None,
         );
         assert!(report.warnings.is_empty());
     }
@@ -628,6 +682,7 @@ mod tests {
             "---\ntype: Person\ntitle: T\ndescription: D\n---\nb\n",
             &types,
             true,
+            None,
         );
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);
         assert_eq!(

@@ -56,6 +56,8 @@ pub enum ConfigError {
     },
     #[error("[[retype]] from = \"{from}\": {why}")]
     RetypeRule { from: String, why: String },
+    #[error(transparent)]
+    AsOf(#[from] crate::staleness::AsOfError),
 }
 
 /// A path shape and the `type` every document matching it carries.
@@ -397,6 +399,19 @@ pub struct Config {
     pub retype: Vec<RetypeRule>,
     #[serde(rename = "type_rules")]
     pub type_rules: Vec<TypeRule>,
+    /// The day this bundle's staleness comparisons resolve to.
+    ///
+    /// **Not a key of `okf.toml`.** It is read from the repository's
+    /// [`crate::staleness::AS_OF_FILE`], which is a separate file on purpose:
+    /// the estate's other date-reading gates read the same one, so a
+    /// repository has a single day to bump rather than one per tool, and the
+    /// bump is a one-line diff rather than an edit inside a config file.
+    /// `deny_unknown_fields` therefore refuses an `as_of` key written here.
+    ///
+    /// `None` means the bundle has committed to no day, and `okf-check` then
+    /// reports every `stale_after` it finds as enforcing nothing.
+    #[serde(skip)]
+    pub as_of: Option<crate::staleness::Day>,
 }
 
 impl Default for Config {
@@ -416,6 +431,7 @@ impl Default for Config {
             mirrors: Vec::new(),
             retype: Vec::new(),
             type_rules: Vec::new(),
+            as_of: None,
         }
     }
 }
@@ -428,24 +444,34 @@ struct Preset {
 impl Config {
     /// Load `okf.toml` from `dir`, falling back to the defaults when absent.
     ///
+    /// `dir` is the *repository* root, which is also where
+    /// [`crate::staleness::AS_OF_FILE`] is read from. Both are absent in a
+    /// bundle that has configured nothing, and both are optional.
+    ///
     /// # Errors
     ///
-    /// Fails when the file exists but cannot be read or parsed, or declares a
-    /// `config_version` this build does not understand.
+    /// Fails when the file exists but cannot be read or parsed, declares a
+    /// `config_version` this build does not understand, or when the as-of
+    /// file exists and does not hold a `YYYY-MM-DD` day.
     pub fn load(dir: &Path) -> Result<Self, ConfigError> {
+        let as_of = crate::staleness::read(dir)?;
         let path = dir.join("okf.toml");
         if !path.exists() {
-            return Ok(Self::default());
+            return Ok(Self {
+                as_of,
+                ..Self::default()
+            });
         }
         let shown = path.display().to_string();
         let text = std::fs::read_to_string(&path).map_err(|source| ConfigError::Read {
             path: shown.clone(),
             source,
         })?;
-        let config: Self = toml::from_str(&text).map_err(|source| ConfigError::Parse {
+        let mut config: Self = toml::from_str(&text).map_err(|source| ConfigError::Parse {
             path: shown.clone(),
             source,
         })?;
+        config.as_of = as_of;
         if config.config_version > SUPPORTED_CONFIG_VERSION {
             return Err(ConfigError::Version {
                 path: shown,

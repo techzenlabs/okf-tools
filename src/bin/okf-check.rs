@@ -16,11 +16,19 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: okf-check [--quiet]\n\
+const USAGE: &str = "usage: okf-check [--quiet] [--as-of=YYYY-MM-DD]\n\
      \x20      okf-check --layouts\n\n\
      Validates the bundle against OKF v0.2. --quiet suppresses warnings.\n\
+     --as-of measures `stale_after` against the given day instead of the one\n\
+     in .gate-as-of, without committing anything. That file is what the gate\n\
+     reads, so that the verdict is a function of the source tree and not of\n\
+     the build machine's calendar; this flag is how a person or a scheduled\n\
+     bump job asks what today would say.\n\
      --layouts checks a tenant site repository instead: it fails when the\n\
      repository tracks a file whose path okf-tools owns.";
+
+/// The `--as-of=` prefix, spelt once.
+const AS_OF_FLAG: &str = "--as-of=";
 
 fn run() -> anyhow::Result<ExitCode> {
     if let Some(bad) = unknown_argument(&["--quiet", "--layouts"]) {
@@ -32,8 +40,27 @@ fn run() -> anyhow::Result<ExitCode> {
     }
     let quiet = std::env::args().any(|a| a == "--quiet");
     let cwd = std::env::current_dir()?;
-    let (root, config) = okf_tools::open_bundle(&cwd)?;
+    let (root, mut config) = okf_tools::open_bundle(&cwd)?;
+
+    // A bad day on the command line is refused rather than ignored, for the
+    // same reason a bad `.gate-as-of` is: a staleness gate that silently
+    // measures against nothing is the defect this feature exists to close.
+    let mut source = ".gate-as-of";
+    if let Some(raw) = as_of_argument() {
+        let Some(day) = okf_tools::staleness::Day::parse(&raw) else {
+            eprintln!("okf-check: --as-of=`{raw}` is not a YYYY-MM-DD day\n\n{USAGE}");
+            return Ok(ExitCode::FAILURE);
+        };
+        config.as_of = Some(day);
+        source = "--as-of";
+    }
     let report = okf_tools::check::check_bundle(&root, &config)?;
+
+    // Printed only when there is a day, so a bundle that uses none of this
+    // sees exactly the output it saw before.
+    if let Some(as_of) = &config.as_of {
+        println!("staleness measured as of {as_of}, from {source}.");
+    }
 
     if !report.warnings.is_empty() && !quiet {
         println!("{} warning(s):", report.warnings.len());
@@ -129,5 +156,12 @@ fn tracked_files() -> Option<String> {
 fn unknown_argument(accepted: &[&str]) -> Option<String> {
     std::env::args()
         .skip(1)
-        .find(|arg| !accepted.contains(&arg.as_str()))
+        .find(|arg| !accepted.contains(&arg.as_str()) && !arg.starts_with(AS_OF_FLAG))
+}
+
+/// The value of `--as-of=`, if it was given.
+fn as_of_argument() -> Option<String> {
+    std::env::args()
+        .skip(1)
+        .find_map(|arg| arg.strip_prefix(AS_OF_FLAG).map(str::to_owned))
 }

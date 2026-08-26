@@ -34,6 +34,7 @@ pub mod retype;
 pub mod scan;
 pub mod sitegen;
 pub mod sitelinks;
+pub mod staleness;
 pub mod walk;
 
 /// Locate the bundle root and its configuration.
