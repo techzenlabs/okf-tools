@@ -13,9 +13,11 @@
 //! What a tenant chooses — its title, its base URL, its bundles — stays in
 //! `site.toml`, which the tenant owns.
 
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 use crate::assemble::AssembleError;
+use crate::hugopath::url_segment;
 use crate::manifest::Manifest;
 
 /// The taxonomies every tenant declares.
@@ -261,6 +263,11 @@ impl RawReport {
 /// no source and are therefore not expected to carry raw markdown; a raw page
 /// with no source is reported the other way round.
 ///
+/// One walk, one mapping. The reverse report is a set difference against the
+/// page directories this walk already built, and not a second derivation that
+/// rebuilds a content path from `public/`. See [`page_directory`] for why a
+/// second derivation cannot be made to agree with the first.
+///
 /// # Errors
 ///
 /// Fails when `content/` cannot be read or a pair cannot be compared.
@@ -268,12 +275,16 @@ pub fn verify_raw(root: &Path) -> Result<RawReport, AssembleError> {
     let public = root.join("public");
     let content = root.join("content");
     let mut report = RawReport::default();
+    let mut expected: BTreeSet<PathBuf> = BTreeSet::new();
 
     for source in crate::walk::markdown_files(&content, &[]) {
         let relative = source.strip_prefix(&content).unwrap_or(&source);
         let page_dir = page_directory(relative);
         let rendered = public.join(&page_dir).join("index.md");
         let shown = crate::walk::to_posix(relative);
+        // Expected whether or not Hugo wrote it: a page it declined to render
+        // is a missing page, never an unexplained one.
+        expected.insert(page_dir.clone());
         if !public.join(&page_dir).join("index.html").is_file() {
             report.missing_html.push(shown.clone());
         }
@@ -293,7 +304,7 @@ pub fn verify_raw(root: &Path) -> Result<RawReport, AssembleError> {
         }
     }
 
-    collect_unmatched(&public, &content, &mut report);
+    collect_unmatched(&public, &expected, &mut report);
     report.differing.sort_by(|a, b| a.rendered.cmp(&b.rendered));
     report.missing_raw.sort();
     report.missing_html.sort();
@@ -302,18 +313,41 @@ pub fn verify_raw(root: &Path) -> Result<RawReport, AssembleError> {
 }
 
 /// Where Hugo publishes the page assembled from this source file.
-fn page_directory(relative: &Path) -> std::path::PathBuf {
+///
+/// This is the only derivation of the content-to-public mapping in the
+/// verifier, and [`collect_unmatched`] is a set difference against what it
+/// returns rather than a second derivation running the other way. A published
+/// segment cannot be un-transformed: `readme` could have come from `README`,
+/// `ReadMe` or `readme`, and `release-notes-draft` from any of several dozen
+/// names. So a reverse pass that rebuilds a content path is always free to
+/// disagree with the forward one, and when it does, one page is reported
+/// missing and unexplained at the same time — a false failure that looks
+/// exactly like a real one.
+fn page_directory(relative: &Path) -> PathBuf {
     let parent = relative.parent().unwrap_or(Path::new(""));
-    match relative.file_name().and_then(|n| n.to_str()) {
-        // A section listing publishes at its own directory; every other page
-        // publishes at a directory named for its stem.
-        Some(name) if name != "_index.md" => parent.join(name.strip_suffix(".md").unwrap_or(name)),
-        _ => parent.to_path_buf(),
+    let mut segments: Vec<String> = parent
+        .components()
+        .map(|part| url_segment(&part.as_os_str().to_string_lossy()))
+        .collect();
+    // A section listing publishes at its own directory; every other page
+    // publishes at a directory named for its stem.
+    if let Some(name) = relative.file_name().and_then(|n| n.to_str()) {
+        if name != "_index.md" {
+            segments.push(url_segment(name.strip_suffix(".md").unwrap_or(name)));
+        }
     }
+    // A segment can sanitise away to nothing, and Hugo then publishes the page
+    // at its parent. Measured with a page named `Ⅻ.md`, which Hugo published
+    // at its section's own URL.
+    segments.retain(|segment| !segment.is_empty());
+    segments.into_iter().collect()
 }
 
 /// Raw markdown under `public/` that no source explains.
-fn collect_unmatched(public: &Path, content: &Path, report: &mut RawReport) {
+///
+/// `expected` is what the forward walk derived, so this is a set difference
+/// and not a second opinion.
+fn collect_unmatched(public: &Path, expected: &BTreeSet<PathBuf>, report: &mut RawReport) {
     let mut stack = vec![public.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -332,9 +366,7 @@ fn collect_unmatched(public: &Path, content: &Path, report: &mut RawReport) {
             }
             let relative = path.strip_prefix(public).unwrap_or(&path);
             let page_dir = relative.parent().unwrap_or(Path::new(""));
-            let leaf = content.join(page_dir).join("_index.md");
-            let page = content.join(format!("{}.md", crate::walk::to_posix(page_dir)));
-            if !leaf.is_file() && !page.is_file() {
+            if !expected.contains(page_dir) {
                 report.unmatched.push(crate::walk::to_posix(relative));
             }
         }
@@ -459,5 +491,70 @@ mod tests {
         assert_eq!(page_directory(Path::new("a/_index.md")), Path::new("a"));
         assert_eq!(page_directory(Path::new("a/b.md")), Path::new("a/b"));
         assert_eq!(page_directory(Path::new("_index.md")), Path::new(""));
+    }
+
+    #[test]
+    fn a_capitalised_directory_and_a_capitalised_stem_publish_lowercased() {
+        assert_eq!(
+            page_directory(Path::new("lane-cast/Documentation/README.md")),
+            Path::new("lane-cast/documentation/readme")
+        );
+        assert_eq!(
+            page_directory(Path::new("lane-cast/Documentation/_index.md")),
+            Path::new("lane-cast/documentation")
+        );
+    }
+
+    /// A segment that sanitises away to nothing leaves the page at its
+    /// parent, which is where Hugo put the measured one.
+    #[test]
+    fn a_segment_that_sanitises_to_nothing_drops_out_of_the_path() {
+        assert_eq!(page_directory(Path::new("p/\u{216b}.md")), Path::new("p"));
+    }
+
+    /// The synthetic negative control, kept after the real one was fixed.
+    ///
+    /// A page that is really absent is reported once, as missing, and never
+    /// also as unexplained. Reporting both is what a second derivation of the
+    /// mapping does, and it is what made this gate cry wolf.
+    #[test]
+    fn a_page_is_never_both_missing_and_unexplained() {
+        let root = std::env::temp_dir().join(format!("okf-raw-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let write = |path: &str, body: &str| {
+            let full = root.join(path);
+            if let Some(parent) = full.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(full, body);
+        };
+
+        write("content/_index.md", "home\n");
+        write("content/Documentation/_index.md", "section\n");
+        write("content/Documentation/README.md", "readme\n");
+        write("public/index.md", "home\n");
+        write("public/index.html", "");
+        write("public/documentation/index.md", "section\n");
+        write("public/documentation/index.html", "");
+        // Hugo declined to render this one, and nothing else explains it.
+        let report = verify_raw(&root).unwrap_or_default();
+        assert_eq!(report.missing_raw, ["Documentation/README.md"]);
+        assert!(report.unmatched.is_empty(), "{:?}", report.unmatched);
+        assert_eq!(report.compared, 2);
+
+        // Now it renders, and the report is clean.
+        write("public/documentation/readme/index.md", "readme\n");
+        write("public/documentation/readme/index.html", "");
+        let report = verify_raw(&root).unwrap_or_default();
+        assert!(report.is_clean(), "{report:?}");
+        assert_eq!(report.compared, 3);
+
+        // A raw page with no source at all is still reported.
+        write("public/stray/index.md", "?\n");
+        let report = verify_raw(&root).unwrap_or_default();
+        assert_eq!(report.unmatched, ["stray/index.md"]);
+        assert!(report.missing_raw.is_empty(), "{:?}", report.missing_raw);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
