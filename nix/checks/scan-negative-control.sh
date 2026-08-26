@@ -21,6 +21,11 @@ cat planted.log
 grep -q "private-key" planted.log || fail "the planted key was not attributed to the private-key rule"
 grep -q "national-identifier-labelled" planted.log ||
   fail "the planted labelled identifier was not found"
+grep -q "sops-encrypted-value" planted.log ||
+  fail "the planted SOPS block was not found"
+if grep -q "AES256" planted.log; then
+  fail "the scanner reproduced the SOPS marker in its own output"
+fi
 if grep -q "BEGIN RSA" planted.log; then
   fail "the scanner reproduced the match in its own output"
 fi
@@ -41,6 +46,18 @@ if okf-scan "$empty" > empty.log 2>&1; then
   fail "a scan that read nothing reported clean"
 fi
 grep -q "read nothing" empty.log || fail "the empty-run refusal did not say why"
+
+# Generated SVG path data is pairs of numbers separated by whitespace, and a
+# decimal coordinate beside the next coordinate has the shape of a formatted
+# identifier without being one. This is the real line from
+# ria-gateway-vna's production-enterprise-dataflow.svg, which fired the rule
+# nine times and blocked a 359-document bundle from mounting.
+paths="$TMPDIR/paths"
+mkdir -p "$paths"
+printf '<path d="M6192.898,648.875Q6194.5,649.75 6196.325254600124,649.75"/>\n' \
+  > "$paths/diagram.svg"
+okf-scan "$paths" > paths.log 2>&1 || { cat paths.log; fail "SVG path data was read as an identifier"; }
+cat paths.log
 
 # A commit hash is nine adjacent digits and must not be an identifier, or the
 # gate becomes noise people learn to ignore.

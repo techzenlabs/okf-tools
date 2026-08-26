@@ -169,10 +169,23 @@ fn rule_sources(bare_nine_digit: bool) -> Vec<(&'static str, &'static str)> {
             "national-identifier-labelled",
             r"(?i)\b(?:ssn|ssns|s\.s\.?n\.?|social\s*security(?:\s*(?:no|number|num|#))?)\b\s*[:#=\-]?\s*\d{3}[-.\s]?\d{2}[-.\s]?\d{4}\b",
         ),
+        // The separator has to be the *same* character twice. A real
+        // formatted identifier is punctuated consistently; a pair of numbers
+        // that happen to sit next to each other is not. Nine matches in one
+        // machine-generated SVG were `649.75 6196` — a decimal coordinate, a
+        // space, the next coordinate — and a gate that fires on path data is
+        // a gate somebody excludes the file from.
         (
             "national-identifier-formatted",
-            r"\b\d{3}[-.\s]\d{2}[-.\s]\d{4}\b",
+            r"\b\d{3}([-.\s])\d{2}\1\d{4}\b",
         ),
+        // A SOPS-encrypted value. The ciphertext is not the secret, but its
+        // presence says a secrets file reached a corpus that publishes, and
+        // the surrounding document usually names what the value is for.
+        // `okf-scan` is the last gate before a public site, so it is the
+        // right place to notice, and every other detector here is a shape
+        // rather than a judgement too.
+        ("sops-encrypted-value", r"\bENC\[AES256_GCM,"),
     ];
     if bare_nine_digit {
         // Hex-aware boundaries rather than digit-aware ones. A nine-digit run
@@ -350,6 +363,15 @@ mod tests {
     const ID_LABELLED: &str = concat!("SS", "N: 123", "456789");
     const ID_BARE: &str = concat!("bare 1234", "56789 run");
     const HASH_LINE: &str = concat!("rev = \"ab1234", "56789cdef0000000000000000000000000\"");
+    /// Real path data, from `production-enterprise-dataflow.svg` in
+    /// `ria-gateway-vna`. A decimal coordinate, a space, the next coordinate.
+    const SVG_PATH: &str =
+        "d=\"M6192.898,648.875Q6194.5,649.75 6196.325254600124,649.75L6202.4289,649.75\"";
+    const SOPS_BLOCK: &str = concat!(
+        "password: ",
+        "ENC[AES256",
+        "_GCM,data:Qm9i,iv:8g==,tag:1w==,type:str]"
+    );
 
     #[test]
     fn a_planted_private_key_header_is_found() {
@@ -380,6 +402,46 @@ mod tests {
             ..Options::default()
         };
         assert!(findings(ID_BARE, &aggressive).contains(&"national-identifier-bare"));
+    }
+
+    /// The separator has to repeat, so a pair of SVG coordinates is not an
+    /// identifier. This fired nine times on one generated diagram and blocked
+    /// a 359-document bundle from mounting.
+    #[test]
+    fn svg_path_data_is_not_a_national_identifier() {
+        assert!(findings(SVG_PATH, &Options::default()).is_empty());
+    }
+
+    /// And the narrowing did not cost the shapes it is meant to catch: each
+    /// separator still matches when it is used consistently.
+    #[test]
+    fn every_consistent_separator_still_matches() {
+        let default = Options::default();
+        for planted in [
+            concat!("id 123", "-45-", "6789 here"),
+            concat!("id 123", ".45.", "6789 here"),
+            concat!("id 123", " 45 ", "6789 here"),
+        ] {
+            assert!(
+                findings(planted, &default).contains(&"national-identifier-formatted"),
+                "{planted}"
+            );
+        }
+    }
+
+    /// A SOPS block is ciphertext, so nothing is readable in it — and it is
+    /// still a secrets file that reached a corpus which publishes.
+    #[test]
+    fn a_sops_encrypted_value_is_found() {
+        assert!(findings(SOPS_BLOCK, &Options::default()).contains(&"sops-encrypted-value"));
+    }
+
+    /// The detector keys on the algorithm marker, not on the word, so prose
+    /// about SOPS does not fail a build.
+    #[test]
+    fn prose_about_sops_is_not_a_finding() {
+        let prose = "Secrets are encrypted with SOPS and age; see modules/secrets.nix.";
+        assert!(findings(prose, &Options::default()).is_empty());
     }
 
     /// The reason the bare pattern is opt-in, asserted rather than argued: a
