@@ -23,6 +23,7 @@ pub mod check;
 pub mod config;
 pub mod frontmatter;
 pub mod glob;
+pub mod hugopath;
 pub mod index;
 pub mod layouts;
 pub mod links;

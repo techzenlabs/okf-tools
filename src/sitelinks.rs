@@ -216,24 +216,38 @@ fn resolve(base: Vec<&str>, path: &str, context: &Context) -> Option<String> {
         return None;
     }
     let name = *segments.last()?;
+    // A URL is not the path the author typed. Hugo lowercases each directory
+    // segment and drops what it will not carry, so a link written
+    // `Documentation/README.md` has to come out as `/lane-cast/documentation/
+    // readme/` or it is a link to a page that was never published. See
+    // [`crate::hugopath`] for the transform and how it was measured.
+    let mut published: Vec<String> = segments
+        .iter()
+        .map(|segment| crate::hugopath::url_segment(segment))
+        .collect();
     if crate::walk::is_markdown(name) {
         let stem = name.strip_suffix(".md")?;
-        let parent = segments.get(..segments.len().saturating_sub(1))?.join("/");
         // `index.md` is the directory's own listing, so it *is* the directory.
         if stem == "index" || stem == "_index" {
-            return Some(format!("/{parent}/"));
+            published.pop()?;
+        } else {
+            *published.last_mut()? = crate::hugopath::url_segment(stem);
         }
-        return Some(format!("/{parent}/{stem}/"));
+        return Some(format!("/{}/", published.join("/")));
     }
     // Everything else has to exist in the assembled tree before it is touched.
     let on_disk = context.mount_dir.join(segments.get(1..)?.join("/"));
     if on_disk.is_dir() {
-        return Some(format!("/{}/", segments.join("/")));
+        return Some(format!("/{}/", published.join("/")));
     }
     if ends_in_slash || !on_disk.is_file() {
         return None;
     }
-    Some(format!("/{}", segments.join("/")))
+    // A page resource keeps its own filename. Hugo sanitises the directories
+    // above it and copies the leaf across exactly as written, so an asset link
+    // is the one place the last segment must not be transformed.
+    name.clone_into(published.last_mut()?);
+    Some(format!("/{}", published.join("/")))
 }
 
 #[cfg(test)]
@@ -332,6 +346,46 @@ mod tests {
             rewrite_text("[a](diagram.png)", &context("adr")),
             "[a](diagram.png)"
         );
+    }
+
+    /// Hugo lowercases every directory segment on the way to a URL, so a link
+    /// written the way the file is named points at a page that was never
+    /// published. These are the two shapes a real bundle carries: a
+    /// capitalised directory and a `README.md`.
+    #[test]
+    fn a_capitalised_page_link_lands_on_the_url_hugo_published() {
+        assert_eq!(
+            rewrite_text("[a](/Documentation/README.md)", &context("")),
+            "[a](/lane-cast/documentation/readme/)"
+        );
+        assert_eq!(
+            rewrite_text("[a](/Documentation/index.md)", &context("")),
+            "[a](/lane-cast/documentation/)"
+        );
+        assert_eq!(
+            rewrite_text("[a](README.md)", &context("Documentation")),
+            "[a](/lane-cast/documentation/readme/)"
+        );
+    }
+
+    /// A page resource is the one place the last segment is left alone: Hugo
+    /// sanitises the directories above it and copies the filename across
+    /// exactly as written, which was measured rather than assumed.
+    #[test]
+    fn a_directory_is_published_lowercased_and_an_asset_keeps_its_own_name() {
+        let mount = std::env::temp_dir().join(format!("okf-links-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(mount.join("Documentation"));
+        let _ = std::fs::write(mount.join("Documentation/Diagram.PNG"), "x");
+        let context = Context::new(&mount, &mount, "lane-cast", "");
+        assert_eq!(
+            rewrite_text("[a](Documentation/)", &context),
+            "[a](/lane-cast/documentation/)"
+        );
+        assert_eq!(
+            rewrite_text("[a](Documentation/Diagram.PNG)", &context),
+            "[a](/lane-cast/documentation/Diagram.PNG)"
+        );
+        let _ = std::fs::remove_dir_all(&mount);
     }
 
     #[test]

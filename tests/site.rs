@@ -48,16 +48,17 @@ fn assemble_fixture(label: &str) -> (PathBuf, assemble::Outcome) {
 fn assembly_renames_every_index_and_lands_the_shared_files() {
     let (root, outcome) = assemble_fixture("assemble");
     assert_eq!(outcome.bundles, 2);
-    assert_eq!(outcome.files, 10);
-    // Five `index.md` across the two bundles, and not one survives under that
+    assert_eq!(outcome.files, 13);
+    // Six `index.md` across the two bundles, and not one survives under that
     // name: Hugo would read each of their directories as a leaf bundle.
-    assert_eq!(outcome.renamed, 5);
+    assert_eq!(outcome.renamed, 6);
     assert_eq!(outcome.local, ["alpha", "beta"]);
 
     for path in [
         "content/_index.md",
         "content/alpha/_index.md",
         "content/alpha/runbooks/_index.md",
+        "content/alpha/Documentation/_index.md",
         "content/beta/notes/_index.md",
     ] {
         assert!(root.join(path).is_file(), "missing {path}");
