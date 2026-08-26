@@ -1,3 +1,9 @@
+---
+type: "Repository Guide"
+title: "Alpha, the first bundle"
+description: "</ul></li>Status: `Active` | Mode: `Standard` — see [the plan and a stray bracket, count < 5, and a `<div>` written in code"
+---
+
 # Alpha
 
 The bundle root listing. OKF §8 reserves this filename for a directory

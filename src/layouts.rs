@@ -26,7 +26,7 @@ pub struct SharedFile {
     pub contents: &'static str,
 }
 
-/// The eleven layout files every tenant renders through.
+/// The twelve layout files every tenant renders through.
 pub const LAYOUTS: &[SharedFile] = &[
     SharedFile {
         path: "layouts/_default/baseof.html",
@@ -51,6 +51,10 @@ pub const LAYOUTS: &[SharedFile] = &[
     SharedFile {
         path: "layouts/partials/okf-meta.html",
         contents: include_str!("../site/layouts/partials/okf-meta.html"),
+    },
+    SharedFile {
+        path: "layouts/partials/okf-search.html",
+        contents: include_str!("../site/layouts/partials/okf-search.html"),
     },
     SharedFile {
         path: "layouts/_default/single.okfmarkdown.md",
@@ -119,18 +123,52 @@ pub fn forked<'a>(tracked: impl IntoIterator<Item = &'a str>) -> Vec<String> {
     found
 }
 
+/// Which owned paths a repository neither tracks nor ignores.
+///
+/// The forked check asks whether a tenant *tracks* a file `okf-tools` owns.
+/// This asks the question one step earlier: `okf-assemble` writes the whole
+/// set into the working tree on every run, so a member the ignore file does
+/// not name shows up as untracked, and is one `git add -A` from being the
+/// fork the other gate refuses.
+///
+/// It has already happened. `layouts/404.html` joined the set and four
+/// tenants' hand-written `.gitignore` files, all older than the file, said
+/// nothing about it. The set is known here and nowhere else, which is why the
+/// question belongs here rather than in four repositories.
+///
+/// `tracked` and `ignored` are both answers from git. A path in either is
+/// fine; a path in neither is reported.
+#[must_use]
+pub fn unignored<'a>(
+    tracked: impl IntoIterator<Item = &'a str>,
+    ignored: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
+    let normalise = |path: &str| path.trim_start_matches("./").replace('\\', "/");
+    let known: std::collections::BTreeSet<String> = tracked
+        .into_iter()
+        .chain(ignored)
+        .map(normalise)
+        .filter(|path| !path.is_empty())
+        .collect();
+    owned_paths()
+        .into_iter()
+        .filter(|owned| !known.contains(*owned))
+        .map(str::to_owned)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Eleven layouts, and the count is asserted because the set is a
+    /// Twelve layouts, and the count is asserted because the set is a
     /// contract: a file added here has to be added to the gate's list in the
     /// same edit, or a tenant could fork the new one and nothing would say so.
     #[test]
-    fn the_shared_set_is_eleven_layouts_and_two_siblings() {
-        assert_eq!(LAYOUTS.len(), 11);
+    fn the_shared_set_is_twelve_layouts_and_two_siblings() {
+        assert_eq!(LAYOUTS.len(), 12);
         assert_eq!(SHARED.len(), 2);
-        assert_eq!(owned_paths().len(), 13);
+        assert_eq!(owned_paths().len(), 14);
     }
 
     #[test]
@@ -151,5 +189,33 @@ mod tests {
 
         let replaced = ["layouts/_default/baseof.html", "site.toml"];
         assert_eq!(forked(replaced), ["layouts/_default/baseof.html"]);
+    }
+
+    /// The real shape of the failure this closes: every owned path ignored
+    /// except the one that joined the set after the ignore file was written.
+    #[test]
+    fn a_shared_file_the_ignore_file_never_heard_of_is_reported() {
+        let late = "layouts/404.html";
+        let ignored: Vec<&str> = owned_paths()
+            .into_iter()
+            .filter(|path| *path != late)
+            .collect();
+        assert_eq!(unignored([], ignored), [late]);
+    }
+
+    /// Tracking one is not a finding here. It is a finding for `forked`, and
+    /// a path reported by both gates twice reads as two problems.
+    #[test]
+    fn a_tracked_shared_file_is_the_other_gate_s_business() {
+        let all: Vec<&str> = owned_paths();
+        assert!(unignored(all, []).is_empty());
+    }
+
+    /// A tenant overlay is not owned, so it is neither gate's business
+    /// whether it is ignored.
+    #[test]
+    fn an_overlay_is_not_owned_and_is_not_reported() {
+        let ignored: Vec<&str> = owned_paths();
+        assert!(unignored(["layouts/partials/brand.html"], ignored).is_empty());
     }
 }
