@@ -15,6 +15,7 @@
 //! * **Never overwrite.** An existing key is left exactly as written, which
 //!   is what makes a second run a no-op and a revert a single `git checkout`.
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -141,22 +142,74 @@ impl Plan {
     }
 }
 
+/// How many documents must share a paragraph before it stops being a
+/// description and starts being boilerplate.
+///
+/// Ten is deliberately well clear of coincidence. Two sibling documents can
+/// open the same way by accident; ten cannot, and in practice the number seen
+/// is in the hundreds — 553 execution plans in `benefits-platform` and 573 in
+/// `radiology-platform` each share their plan template's standing sentence.
+const BOILERPLATE_SHARED_BY: usize = 10;
+
+/// How many times to look again after removing a layer of boilerplate.
+///
+/// Each round can only reveal what the previous one was hiding, and in this
+/// estate two rounds settle it. Eight is a backstop against a pathological
+/// corpus rather than a number anything depends on.
+const BOILERPLATE_ROUNDS: usize = 8;
+
 /// Work out what migration would do, writing nothing.
+///
+/// Two passes, because whether a paragraph is a description is not a property
+/// of the document it sits in. A sentence that hundreds of documents share
+/// verbatim describes the *template* they were copied from, and writing it
+/// into all of them puts one string in hundreds of listing entries. The first
+/// pass finds those; the second re-derives past them.
 #[must_use]
 pub fn plan(root: &Path, config: &Config) -> Plan {
+    let documents: Vec<(String, String)> = walk::markdown_files(root, &config.paths.skip_names)
+        .into_iter()
+        .filter_map(|path| {
+            let relative = walk::to_posix(path.strip_prefix(root).ok()?);
+            Some((relative, walk::read_lossy(&path)))
+        })
+        .collect();
+
+    // Iterate rather than sweep once. A round only ever sees each document's
+    // *current* first choice, so skipping one shared paragraph can reveal a
+    // second one behind it — measured on `benefits-platform`, where 553
+    // documents share the plan template's sentence and 31 of those then share
+    // the next paragraph too. Rounds are bounded because each one strictly
+    // grows the set, and a corpus that needed more than a handful is one where
+    // no paragraph is a description.
+    let mut boilerplate: HashSet<String> = HashSet::new();
+    for _ in 0..BOILERPLATE_ROUNDS {
+        let mut seen: HashMap<String, usize> = HashMap::new();
+        for (relative, text) in &documents {
+            if let Some(description) = plan_one(relative, text, config, &boilerplate).description {
+                *seen.entry(description).or_default() += 1;
+            }
+        }
+        let found: Vec<String> = seen
+            .into_iter()
+            .filter(|&(_, count)| count >= BOILERPLATE_SHARED_BY)
+            .map(|(description, _)| description)
+            .collect();
+        if found.is_empty() {
+            break;
+        }
+        boilerplate.extend(found);
+    }
+
     let mut plan = Plan::default();
-    for path in walk::markdown_files(root, &config.paths.skip_names) {
-        let Ok(relative) = path.strip_prefix(root) else {
-            continue;
-        };
-        let relative = walk::to_posix(relative);
-        let text = walk::read_lossy(&path);
-        plan.entries.push(plan_one(&relative, &text, config));
+    for (relative, text) in &documents {
+        plan.entries
+            .push(plan_one(relative, text, config, &boilerplate));
     }
     plan
 }
 
-fn plan_one(relative: &str, text: &str, config: &Config) -> Entry {
+fn plan_one(relative: &str, text: &str, config: &Config, boilerplate: &HashSet<String>) -> Entry {
     let mut entry = Entry {
         path: relative.to_owned(),
         concept_type: None,
@@ -220,7 +273,7 @@ fn plan_one(relative: &str, text: &str, config: &Config) -> Entry {
 
     if has("description") {
         entry.description_source = Source::Existing;
-    } else if let Some(description) = derive_description(body) {
+    } else if let Some(description) = derive_description(body, boilerplate) {
         entry.description = Some(description);
         entry.description_source = Source::Paragraph;
     }
@@ -315,12 +368,24 @@ fn opens_a_metadata_block(para: &str) -> bool {
 /// listing. Measured on `radiology-platform`: 1,633 of 1,815 documents, of
 /// which 1,631 have real prose in a later paragraph. The two that do not are
 /// its `0000-template.md` files, which are correctly reported as undescribed.
-fn derive_description(body: &str) -> Option<String> {
-    let para = PARA_SPLIT.split(body).map(str::trim).find(|p| {
-        !p.is_empty()
-            && !starts_with_any(p, &["#", "*", "-", "|", ">", "<!--", "```", "1."])
-            && !opens_a_metadata_block(p)
-    })?;
+fn derive_description(body: &str, boilerplate: &HashSet<String>) -> Option<String> {
+    PARA_SPLIT
+        .split(body)
+        .map(str::trim)
+        .filter(|p| {
+            !p.is_empty()
+                && !starts_with_any(p, &["#", "*", "-", "|", ">", "<!--", "```", "1."])
+                && !opens_a_metadata_block(p)
+        })
+        .filter_map(render_description)
+        .find(|candidate| !boilerplate.contains(candidate))
+}
+
+/// One paragraph, collapsed onto a line and truncated the way a listing wants
+/// it. Separate from the choosing above so that both passes render a candidate
+/// identically — a boilerplate set built from unrendered paragraphs would
+/// never match the rendered ones it is meant to exclude.
+fn render_description(para: &str) -> Option<String> {
     let collapsed = para.split_whitespace().collect::<Vec<_>>().join(" ");
     let flattened = MD_LINK.replace_all(&collapsed, "${1}").into_owned();
     let trimmed = truncate_words(&flattened, 200);
@@ -425,7 +490,7 @@ mod tests {
     fn a_bare_document_gains_type_title_and_description() {
         let config = config_with(&[("adr/*.md", "Decision Record")]);
         let text = "# Use Postgres\n\nWe pick Postgres because it is already run here.\n";
-        let entry = plan_one("adr/0001-db.md", text, &config);
+        let entry = plan_one("adr/0001-db.md", text, &config, &HashSet::new());
 
         assert_eq!(entry.concept_type.as_deref(), Some("Decision Record"));
         assert_eq!(entry.title_source, Source::Heading);
@@ -440,7 +505,7 @@ mod tests {
     fn an_existing_key_is_never_overwritten() {
         let config = config_with(&[("adr/*.md", "Decision Record")]);
         let text = "---\ntype: \"Runbook\"\ntitle: \"Kept\"\n---\n\n# Ignored heading\n\nProse.\n";
-        let entry = plan_one("adr/x.md", text, &config);
+        let entry = plan_one("adr/x.md", text, &config, &HashSet::new());
 
         assert_eq!(entry.concept_type.as_deref(), Some("Runbook"));
         assert_eq!(entry.title_source, Source::Existing);
@@ -454,7 +519,12 @@ mod tests {
     #[test]
     fn a_file_no_rule_matches_is_reported_and_left_alone() {
         let config = config_with(&[("adr/*.md", "Decision Record")]);
-        let entry = plan_one("elsewhere/x.md", "# T\n\nProse.\n", &config);
+        let entry = plan_one(
+            "elsewhere/x.md",
+            "# T\n\nProse.\n",
+            &config,
+            &HashSet::new(),
+        );
         assert_eq!(entry.skip, Some(Skip::NoTypeRule));
         assert!(entry.rewritten.is_none());
     }
@@ -468,7 +538,12 @@ mod tests {
             },
             ..config_with(&[("**/*.md", "Reference")])
         };
-        let entry = plan_one("generated/inventory.md", "# I\n\nProse.\n", &config);
+        let entry = plan_one(
+            "generated/inventory.md",
+            "# I\n\nProse.\n",
+            &config,
+            &HashSet::new(),
+        );
         assert_eq!(entry.skip, Some(Skip::Generated));
         assert!(entry.rewritten.is_none());
     }
@@ -477,11 +552,11 @@ mod tests {
     fn reserved_filenames_are_left_to_their_own_tools() {
         let config = config_with(&[("**/*.md", "Reference")]);
         assert_eq!(
-            plan_one("a/index.md", "# a\n", &config).skip,
+            plan_one("a/index.md", "# a\n", &config, &HashSet::new()).skip,
             Some(Skip::Reserved)
         );
         assert_eq!(
-            plan_one("log.md", "# log\n", &config).skip,
+            plan_one("log.md", "# log\n", &config, &HashSet::new()).skip,
             Some(Skip::Reserved)
         );
     }
@@ -489,7 +564,12 @@ mod tests {
     #[test]
     fn a_malformed_block_is_reported_rather_than_migrated_into() {
         let config = config_with(&[("**/*.md", "Reference")]);
-        let entry = plan_one("a.md", "---\na: 1\na: 2\n---\n\nProse.\n", &config);
+        let entry = plan_one(
+            "a.md",
+            "---\na: 1\na: 2\n---\n\nProse.\n",
+            &config,
+            &HashSet::new(),
+        );
         assert!(matches!(entry.skip, Some(Skip::Unparseable(_))));
         assert!(entry.rewritten.is_none());
     }
@@ -497,10 +577,10 @@ mod tests {
     #[test]
     fn a_second_pass_finds_nothing_to_do() {
         let config = config_with(&[("adr/*.md", "Decision Record")]);
-        let first = plan_one("adr/x.md", "# T\n\nProse.\n", &config)
+        let first = plan_one("adr/x.md", "# T\n\nProse.\n", &config, &HashSet::new())
             .rewritten
             .unwrap();
-        let second = plan_one("adr/x.md", &first, &config);
+        let second = plan_one("adr/x.md", &first, &config, &HashSet::new());
         assert_eq!(second.skip, Some(Skip::AlreadyMigrated));
         assert!(second.rewritten.is_none());
     }
@@ -512,6 +592,7 @@ mod tests {
             "adr/0001-postgres.md",
             text,
             &config_with(&[("adr/*.md", "Decision Record")]),
+            &HashSet::new(),
         );
         assert_eq!(entry.description_source, Source::Paragraph);
         assert_eq!(
@@ -530,10 +611,64 @@ mod tests {
             "adr/0070-amended.md",
             text,
             &config_with(&[("adr/*.md", "Decision Record")]),
+            &HashSet::new(),
         );
         assert_eq!(
             entry.description.as_deref(),
             Some("Amended reports reach every original recipient.")
+        );
+    }
+
+    #[test]
+    fn a_sentence_hundreds_of_documents_share_is_not_a_description() {
+        // The plan template's standing sentence. 553 execution plans in
+        // `benefits-platform` and 573 in `radiology-platform` open on it, so
+        // taking it as the description puts one string in hundreds of listing
+        // entries. It describes the template, not the document.
+        const BOILERPLATE: &str =
+            "This execution plan is a living document. Keep the steps ticked.";
+        let root = std::env::temp_dir().join(format!("okf-boilerplate-{}", std::process::id()));
+        let plans = root.join("plans");
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(&plans).unwrap();
+        for n in 0..12 {
+            std::fs::write(
+                plans.join(format!("{n:04}-thing.md")),
+                format!("# Plan {n:04}\n\nStatus: active\nOwner: someone\n\n{BOILERPLATE}\n\nWhat plan {n:04} actually does.\n"),
+            )
+            .unwrap();
+        }
+        // One document below the threshold shares nothing, so its own lead
+        // paragraph stands even though it sits in the same directory.
+        std::fs::write(
+            plans.join("9999-singular.md"),
+            "# Singular\n\nStatus: active\n\nA plan nobody copied from a template.\n",
+        )
+        .unwrap();
+
+        let config = config_with(&[("plans/*.md", "Execution Plan")]);
+        let plan = plan(&root, &config);
+        std::fs::remove_dir_all(&root).ok();
+
+        let described: Vec<&str> = plan
+            .entries
+            .iter()
+            .filter_map(|e| e.description.as_deref())
+            .collect();
+        assert_eq!(described.len(), 13, "{described:?}");
+        assert!(
+            !described
+                .iter()
+                .any(|d| d.starts_with("This execution plan")),
+            "the shared sentence was written as a description: {described:?}"
+        );
+        assert!(
+            described.contains(&"A plan nobody copied from a template."),
+            "a paragraph nobody shares must still be a description: {described:?}"
+        );
+        assert!(
+            described.contains(&"What plan 0000 actually does."),
+            "the paragraph after the boilerplate is the description: {described:?}"
         );
     }
 
@@ -548,6 +683,7 @@ mod tests {
             "architecture/order-intake.md",
             text,
             &config_with(&[("architecture/*.md", "Architecture Note")]),
+            &HashSet::new(),
         );
         assert_eq!(
             entry.description.as_deref(),
@@ -566,6 +702,7 @@ mod tests {
             "release/cert-register.md",
             text,
             &config_with(&[("release/*.md", "Release Note")]),
+            &HashSet::new(),
         );
         assert_eq!(
             entry.description.as_deref(),
@@ -580,6 +717,7 @@ mod tests {
             "adr/0000-template.md",
             text,
             &config_with(&[("adr/*.md", "Decision Record")]),
+            &HashSet::new(),
         );
         assert_eq!(entry.description_source, Source::None);
         assert_eq!(entry.description, None);
@@ -589,14 +727,21 @@ mod tests {
     fn a_title_with_a_colon_or_a_quote_survives_quoting() {
         let config = config_with(&[("a/*.md", "Reference")]);
         let text = "# Phase 6: \"Design\" it\n\nProse.\n";
-        let out = plan_one("a/x.md", text, &config).rewritten.unwrap();
+        let out = plan_one("a/x.md", text, &config, &HashSet::new())
+            .rewritten
+            .unwrap();
         assert!(out.contains(r#"title: "Phase 6: \"Design\" it""#), "{out}");
     }
 
     #[test]
     fn a_document_with_no_heading_falls_back_to_its_filename() {
         let config = config_with(&[("a/*.md", "Reference")]);
-        let entry = plan_one("a/some-long-name.md", "Just prose here.\n", &config);
+        let entry = plan_one(
+            "a/some-long-name.md",
+            "Just prose here.\n",
+            &config,
+            &HashSet::new(),
+        );
         assert_eq!(entry.title_source, Source::Filename);
         assert_eq!(entry.title.as_deref(), Some("Some Long Name"));
     }
@@ -604,7 +749,12 @@ mod tests {
     #[test]
     fn a_document_with_no_prose_is_reported_as_undescribed() {
         let config = config_with(&[("a/*.md", "Reference")]);
-        let entry = plan_one("a/x.md", "# T\n\n* only\n* a list\n", &config);
+        let entry = plan_one(
+            "a/x.md",
+            "# T\n\n* only\n* a list\n",
+            &config,
+            &HashSet::new(),
+        );
         assert_eq!(entry.description_source, Source::None);
         assert!(entry.rewritten.is_some(), "it still gains type and title");
     }
