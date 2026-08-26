@@ -717,7 +717,17 @@ fn profile_org(source: &Bundle, name: &str) -> Option<String> {
                 continue;
             }
             for line in text.lines() {
-                if let Some(rest) = line.trim().strip_prefix("**Org / role:**") {
+                // The line is written as a list item in every profile this
+                // estate actually has — `- **Org / role:** …` — and reading
+                // it without stripping the marker found nothing in all 48 of
+                // them while reporting no error at all. A parser that returns
+                // "no org" for "the org is on the next byte" turns the whole
+                // rule off silently, which is worse than not having it.
+                let bare = line
+                    .trim_start()
+                    .trim_start_matches(['-', '*', '+'])
+                    .trim_start();
+                if let Some(rest) = bare.strip_prefix("**Org / role:**") {
                     let org = rest.trim();
                     if !org.is_empty() {
                         return Some(org.to_owned());
