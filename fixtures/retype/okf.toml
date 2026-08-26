@@ -1,0 +1,45 @@
+# A synthetic bundle already typed, whose names are being reduced to the
+# ratified vocabulary by `okf-migrate --retype`.
+#
+# It carries one of every shape the pass has to get right: a bare value, a
+# double-quoted one, a single-quoted one, a name the table retires rather than
+# renames, a name the table does not mention, and the trap — a `^type:` line
+# that is an exemplar inside a fenced code block and not the document's own
+# type.
+config_version = 1
+okf_version = "0.2"
+bundle_root = "."
+title = "Retype fixture"
+description = "A corpus that is already typed, against a smaller vocabulary."
+max_warnings = 1000
+
+[vocabulary]
+extends = ["core", "capture", "knowledge"]
+
+[[retype]]
+from = "Meeting Summary"
+to = "Meeting"
+
+[[retype]]
+from = "Email Thread"
+to = "Correspondence"
+
+[[retype]]
+from = "Text Thread"
+to = "Correspondence"
+
+[[retype]]
+from = "Prompt Template"
+to = "Template"
+
+# Retired rather than renamed. `type` is never removed — §11 requires it — so
+# the files are listed and a person deletes or retypes each one.
+[[retype]]
+from = "Toolkit Index"
+review = "a hand-maintained listing that §8's generated index.md replaces; delete the file"
+
+# One old name, four new ones, decided by the directory the file sits in.
+# These are the only judgements in the pass.
+[[retype]]
+from = "Knowledge Base Page"
+review = "Architecture Note, Runbook, Governance Document or Reference, by directory"

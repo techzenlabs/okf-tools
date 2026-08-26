@@ -311,6 +311,41 @@ pub fn block(text: &str) -> Option<&str> {
         .map(|m| m.as_str())
 }
 
+/// The byte range of the raw value of top-level scalar `key`, within `text`.
+///
+/// This is what lets a caller rewrite one value and leave every other byte of
+/// the file exactly as written — no requoting, no reordering, no reflowing of
+/// a block the caller never looked at. `okf-migrate --retype` changes 672
+/// documents in one pass and must change nothing but their `type`.
+///
+/// The range covers the value with trailing whitespace excluded, so a line
+/// written `type: Runbook   ` keeps its trailing spaces. It is empty for a key
+/// written with no value at all.
+///
+/// `None` when the file has no frontmatter block or the block has no such key
+/// at column zero. Both refusals matter: a `type:` line inside a fenced code
+/// block further down the file is an exemplar in somebody's prompt template,
+/// not the document's own type, and this never sees it.
+#[must_use]
+pub fn scalar_span(text: &str, key: &str) -> Option<std::ops::Range<usize>> {
+    let body = FENCE_OPTIONAL_NL.captures(text)?.get(1)?;
+    let mut at = body.start();
+    for raw in body.as_str().split('\n') {
+        let line = raw.strip_suffix('\r').unwrap_or(raw);
+        if let Some(caps) = KEY_LINE.captures(line)
+            && caps.get(1).is_some_and(|name| name.as_str() == key)
+            && let Some(value) = caps.get(2)
+        {
+            let start = at.saturating_add(value.start());
+            let len = value.as_str().trim_end().len();
+            return Some(start..start.saturating_add(len));
+        }
+        // `split('\n')` consumed the separator, so step over it too.
+        at = at.saturating_add(raw.len()).saturating_add(1);
+    }
+    None
+}
+
 /// The lines indented under top-level `key`, with their 1-based file line
 /// numbers.
 ///
@@ -471,6 +506,62 @@ mod tests {
         assert!(FENCE_REQUIRED_NL.is_match("---\na: b\n---\n"));
         assert!(KEY_LINE.is_match("a: b"));
         assert!(LIST_ITEM.is_match("  - x"));
+    }
+
+    /// Splice a new value into the span, which is the only thing the span is
+    /// for and the only way to assert it lands on the right bytes.
+    fn spliced(text: &str, key: &str, value: &str) -> String {
+        let span = scalar_span(text, key).unwrap();
+        let mut out = text.to_owned();
+        out.replace_range(span, value);
+        out
+    }
+
+    #[test]
+    fn a_scalar_span_covers_the_value_and_nothing_around_it() {
+        let text = "---\ntype: \"Meeting Summary\"\ntitle: \"Kept\"\n---\n\n# Body\n";
+        assert_eq!(
+            spliced(text, "type", "\"Meeting\""),
+            "---\ntype: \"Meeting\"\ntitle: \"Kept\"\n---\n\n# Body\n"
+        );
+    }
+
+    #[test]
+    fn a_scalar_span_leaves_trailing_whitespace_and_crlf_alone() {
+        let text = "---\r\ntype: Runbook  \r\ntitle: Kept\r\n---\r\n\r\nBody\r\n";
+        assert_eq!(
+            spliced(text, "type", "Reference"),
+            "---\r\ntype: Reference  \r\ntitle: Kept\r\n---\r\n\r\nBody\r\n"
+        );
+    }
+
+    /// The estate has documents whose `^type:` line is an exemplar inside a
+    /// fenced code block in a prompt template. It is not the document's own
+    /// type, a grep counts it, and this must not see it.
+    #[test]
+    fn a_type_line_in_a_code_fence_is_not_frontmatter() {
+        let template = "# Prompt\n\nWrite the block:\n\n```yaml\ntype: Meeting Summary\n```\n";
+        assert_eq!(scalar_span(template, "type"), None);
+
+        // Same line, in a document that does have frontmatter: the block's own
+        // key wins and the exemplar below it is never reached.
+        let both = "---\ntype: Template\n---\n\n```yaml\ntype: Meeting Summary\n```\n";
+        assert_eq!(
+            spliced(both, "type", "Template"),
+            both,
+            "the exemplar in the fence must be untouched"
+        );
+        assert_eq!(
+            spliced(both, "type", "Reference"),
+            "---\ntype: Reference\n---\n\n```yaml\ntype: Meeting Summary\n```\n"
+        );
+    }
+
+    #[test]
+    fn a_key_absent_or_indented_has_no_span() {
+        assert_eq!(scalar_span("---\ntitle: x\n---\n", "type"), None);
+        // Only column zero is a key, so a nested `type` is not this document's.
+        assert_eq!(scalar_span("---\nowner:\n  type: x\n---\n", "type"), None);
     }
 
     #[test]

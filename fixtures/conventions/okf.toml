@@ -1,0 +1,24 @@
+# A synthetic bundle for the two conventions a bundle records in okf.toml and
+# then relies on the tool to hold: the retirement of `README.md`, and the site
+# tail a vendored mirror's entry titles carry.
+#
+# Both were declared and read by nothing (okf-tools#1, okf-tools#7), which is
+# worse than either enforcing or deleting them: every adopting repository wrote
+# the line believing it did something.
+config_version = 1
+okf_version = "0.2"
+bundle_root = "."
+title = "Conventions fixture"
+description = "The two okf.toml conventions that had no fixture."
+max_warnings = 1000
+
+[vocabulary]
+extends = ["core", "knowledge"]
+
+[paths]
+# §8's generated index.md carries the listing here, so the name is retired.
+keep_readme = false
+
+[[mirror]]
+paths = ["sources/vendor"]
+title_strip = '\s*\|\s*Some Site\s*$'

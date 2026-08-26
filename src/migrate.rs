@@ -20,7 +20,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use crate::config::Config;
-use crate::frontmatter::{ParseError, parse_strict};
+use crate::frontmatter::{Frontmatter, ParseError, parse_strict};
 use crate::index::{MD_LINK, PARA_SPLIT, starts_with_any, truncate_words};
 use crate::walk;
 
@@ -165,6 +165,11 @@ const BOILERPLATE_ROUNDS: usize = 8;
 /// verbatim describes the *template* they were copied from, and writing it
 /// into all of them puts one string in hundreds of listing entries. The first
 /// pass finds those; the second re-derives past them.
+///
+/// The counting pass reads **every** document, including the ones this run
+/// would not write to. See [`description_candidates`]: counting only what a
+/// run was newly describing made the rule work on a bundle's first migration
+/// and fail on every one after it.
 #[must_use]
 pub fn plan(root: &Path, config: &Config) -> Plan {
     let documents: Vec<(String, String)> = walk::markdown_files(root, &config.paths.skip_names)
@@ -186,8 +191,8 @@ pub fn plan(root: &Path, config: &Config) -> Plan {
     for _ in 0..BOILERPLATE_ROUNDS {
         let mut seen: HashMap<String, usize> = HashMap::new();
         for (relative, text) in &documents {
-            if let Some(description) = plan_one(relative, text, config, &boilerplate).description {
-                *seen.entry(description).or_default() += 1;
+            for candidate in description_candidates(relative, text, config, &boilerplate) {
+                *seen.entry(candidate).or_default() += 1;
             }
         }
         let found: Vec<String> = seen
@@ -209,6 +214,117 @@ pub fn plan(root: &Path, config: &Config) -> Plan {
     plan
 }
 
+/// `index.md` and `log.md` are generated and hand-maintained; §8 and §9 own
+/// their shape, not this tool or [`crate::retype`].
+pub(crate) fn is_reserved(relative: &str) -> bool {
+    let name = relative.rsplit('/').next().unwrap_or(relative);
+    name == "index.md" || name == "log.md"
+}
+
+/// A document this tool is willing to migrate: what its frontmatter already
+/// says, its body, and the `type` it will carry.
+struct Opened<'a> {
+    existing: Option<Frontmatter>,
+    body: &'a str,
+    concept_type: String,
+    rule: String,
+    /// Whether `type` was already written, in which case this run leaves it.
+    type_existed: bool,
+}
+
+impl Opened<'_> {
+    /// The scalar at `key`, or `None` when it is absent or empty.
+    ///
+    /// Absent and empty are the same answer here: a `description:` with
+    /// nothing after it describes nothing, and both mean this run may write.
+    fn value(&self, key: &str) -> Option<String> {
+        let value = self.existing.as_ref()?.get_unquoted(key);
+        (!value.is_empty()).then_some(value)
+    }
+}
+
+/// Open a document, or say why this tool leaves it alone.
+///
+/// Shared by [`plan_one`] and [`description_candidates`], so the two passes
+/// over a bundle cannot disagree about which files they are looking at.
+fn open<'a>(relative: &str, text: &'a str, config: &Config) -> Result<Opened<'a>, Skip> {
+    if is_reserved(relative) {
+        return Err(Skip::Reserved);
+    }
+    if config.is_generated(relative) {
+        return Err(Skip::Generated);
+    }
+
+    let (existing, body) = match parse_strict(text) {
+        Ok(fm) => (Some(fm), strip_frontmatter(text)),
+        Err(ParseError::NoFence) if !text.starts_with("---") => (None, text),
+        Err(ParseError::NoFence) => {
+            return Err(Skip::Unparseable("unterminated fence".to_owned()));
+        }
+        Err(other) => return Err(Skip::Unparseable(other.message())),
+    };
+
+    let written_type = existing
+        .as_ref()
+        .map(|fm| fm.get_unquoted("type"))
+        .filter(|value| !value.is_empty());
+
+    // `type` decides whether this file can be migrated at all.
+    let (concept_type, rule, type_existed) = if let Some(concept_type) = written_type {
+        (concept_type, "existing".to_owned(), true)
+    } else if let Some((concept_type, rule)) = config.type_for(relative) {
+        (concept_type.to_owned(), rule.to_owned(), false)
+    } else {
+        return Err(Skip::NoTypeRule);
+    };
+
+    Ok(Opened {
+        existing,
+        body,
+        concept_type,
+        rule,
+        type_existed,
+    })
+}
+
+/// Every string a document offers as its description: the one already written
+/// in its frontmatter, and the first prose paragraph this tool would derive
+/// for it.
+///
+/// **A document that already carries a `description` offers both, and that is
+/// the whole of it.** The counting pass used to read only what a run was newly
+/// writing, which made the boilerplate rule work exactly once per bundle. On
+/// `benefits-platform`'s first migration 553 execution plans shared their
+/// template's standing sentence and none of them got it; migrating one
+/// newly-merged plan into the same repository an hour later counted that
+/// sentence *once*, because all 553 siblings now had descriptions and
+/// contributed nothing, and wrote the template's sentence into the new
+/// document. Deriving for a described document as well makes the count 554 on
+/// the first incremental run.
+///
+/// The two are deduplicated, so a document whose written description is also
+/// its lead paragraph counts once rather than twice.
+fn description_candidates(
+    relative: &str,
+    text: &str,
+    config: &Config,
+    boilerplate: &HashSet<String>,
+) -> Vec<String> {
+    let Ok(opened) = open(relative, text, config) else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    if let Some(written) = opened.value("description") {
+        candidates.push(written);
+    }
+    if let Some(derived) = derive_description(opened.body, boilerplate)
+        && !candidates.contains(&derived)
+    {
+        candidates.push(derived);
+    }
+    candidates
+}
+
 fn plan_one(relative: &str, text: &str, config: &Config, boilerplate: &HashSet<String>) -> Entry {
     let mut entry = Entry {
         path: relative.to_owned(),
@@ -222,63 +338,32 @@ fn plan_one(relative: &str, text: &str, config: &Config, boilerplate: &HashSet<S
         rewritten: None,
     };
 
-    let name = relative.rsplit('/').next().unwrap_or(relative);
-    if name == "index.md" || name == "log.md" {
-        entry.skip = Some(Skip::Reserved);
-        return entry;
-    }
-    if config.is_generated(relative) {
-        entry.skip = Some(Skip::Generated);
-        return entry;
-    }
-
-    let (existing, body) = match parse_strict(text) {
-        Ok(fm) => (Some(fm), strip_frontmatter(text)),
-        Err(ParseError::NoFence) if !text.starts_with("---") => (None, text),
-        Err(ParseError::NoFence) => {
-            entry.skip = Some(Skip::Unparseable("unterminated fence".to_owned()));
-            return entry;
-        }
-        Err(other) => {
-            entry.skip = Some(Skip::Unparseable(other.message()));
+    let opened = match open(relative, text, config) {
+        Ok(opened) => opened,
+        Err(skip) => {
+            entry.skip = Some(skip);
             return entry;
         }
     };
+    entry.concept_type = Some(opened.concept_type.clone());
+    entry.rule = Some(opened.rule.clone());
 
-    let has = |key: &str| {
-        existing
-            .as_ref()
-            .is_some_and(|fm| !fm.get_unquoted(key).is_empty())
-    };
-
-    // `type` decides whether this file can be migrated at all.
-    if has("type") {
-        entry.concept_type = existing.as_ref().map(|fm| fm.get_unquoted("type"));
-        entry.rule = Some("existing".to_owned());
-    } else if let Some((concept_type, rule)) = config.type_for(relative) {
-        entry.concept_type = Some(concept_type.to_owned());
-        entry.rule = Some(rule.to_owned());
-    } else {
-        entry.skip = Some(Skip::NoTypeRule);
-        return entry;
-    }
-
-    if has("title") {
+    if opened.value("title").is_some() {
         entry.title_source = Source::Existing;
     } else {
-        let (title, source) = derive_title(relative, body);
+        let (title, source) = derive_title(relative, opened.body);
         entry.title = Some(title);
         entry.title_source = source;
     }
 
-    if has("description") {
+    if opened.value("description").is_some() {
         entry.description_source = Source::Existing;
-    } else if let Some(description) = derive_description(body, boilerplate) {
+    } else if let Some(description) = derive_description(opened.body, boilerplate) {
         entry.description = Some(description);
         entry.description_source = Source::Paragraph;
     }
 
-    let writes_type = !has("type");
+    let writes_type = !opened.type_existed;
     if !writes_type && entry.title.is_none() && entry.description.is_none() {
         entry.skip = Some(Skip::AlreadyMigrated);
         return entry;
@@ -670,6 +755,52 @@ mod tests {
             described.contains(&"What plan 0000 actually does."),
             "the paragraph after the boilerplate is the description: {described:?}"
         );
+    }
+
+    #[test]
+    fn boilerplate_is_still_boilerplate_once_its_siblings_are_described() {
+        // The incremental run, which is the one that got this wrong. Twelve
+        // plans were migrated a week ago and carry descriptions; one new plan
+        // lands, copied from the same template. Counting only what this run
+        // would newly describe sees the template's sentence once, and writes
+        // it into the new document.
+        const BOILERPLATE: &str =
+            "This execution plan is a living document. Keep the steps ticked.";
+        let root = std::env::temp_dir().join(format!("okf-incremental-{}", std::process::id()));
+        let plans = root.join("plans");
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(&plans).unwrap();
+        for n in 0..12 {
+            std::fs::write(
+                plans.join(format!("{n:04}-thing.md")),
+                format!(
+                    "---\ntype: \"Execution Plan\"\ntitle: \"Plan {n:04}\"\ndescription: \"What plan {n:04} actually does.\"\n---\n\n# Plan {n:04}\n\n{BOILERPLATE}\n\nWhat plan {n:04} actually does.\n"
+                ),
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            plans.join("0012-new.md"),
+            format!("# Plan 0012\n\n{BOILERPLATE}\n\nWhat plan 0012 actually does.\n"),
+        )
+        .unwrap();
+
+        let config = config_with(&[("plans/*.md", "Execution Plan")]);
+        let plan = plan(&root, &config);
+        std::fs::remove_dir_all(&root).ok();
+
+        let new = plan
+            .entries
+            .iter()
+            .find(|e| e.path == "plans/0012-new.md")
+            .unwrap();
+        assert_eq!(
+            new.description.as_deref(),
+            Some("What plan 0012 actually does."),
+            "the template's sentence was written into the one new document"
+        );
+        // The twelve siblings are finished and this run must not rewrite them.
+        assert_eq!(plan.changes().count(), 1);
     }
 
     #[test]

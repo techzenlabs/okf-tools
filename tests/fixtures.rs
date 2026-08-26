@@ -23,7 +23,7 @@
 use std::path::{Path, PathBuf};
 
 use okf_tools::promote::{self, Bundle, Kind, PromoteError, Revisions, Severity};
-use okf_tools::{check, config::Config, index};
+use okf_tools::{check, config::Config, index, retype};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -760,4 +760,147 @@ fn a_hand_restated_draft_that_grows_an_owner_subkey_is_refused() {
     assert!(!destination.root.join("systems/press-relay.md").exists());
 
     let _ = std::fs::remove_dir_all(destination.root.parent().unwrap_or(&destination.root));
+}
+
+/// `[paths] keep_readme` and the mirror `title_strip` were both declared in
+/// `okf.toml` and exercised by nothing — okf-tools#7 and #1. A key an adopting
+/// repository writes and believes is worse than no key, so both get a fixture.
+#[test]
+fn a_retired_readme_is_reported_and_a_kept_one_is_not() {
+    let (root, config) = load("conventions");
+    let report = check::check_bundle(&root, &config).unwrap();
+
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    let readme: Vec<&String> = report
+        .warnings
+        .iter()
+        .filter(|w| w.contains("keep_readme"))
+        .collect();
+    assert_eq!(readme.len(), 1, "{:?}", report.warnings);
+    assert!(readme[0].starts_with("README.md:"), "{readme:?}");
+
+    // The negative control, which is the half that says the key is read rather
+    // than the diagnostic hard-coded: the same bundle keeping the name reports
+    // nothing at all.
+    let keeping = Config {
+        paths: okf_tools::config::Paths {
+            keep_readme: true,
+            ..config.paths.clone()
+        },
+        ..config
+    };
+    let quiet = check::check_bundle(&root, &keeping).unwrap();
+    assert!(
+        !quiet.warnings.iter().any(|w| w.contains("keep_readme")),
+        "{:?}",
+        quiet.warnings
+    );
+}
+
+#[test]
+fn a_mirror_strips_the_site_tail_from_its_own_entries_and_no_others() {
+    let root = scratch_copy("conventions", "mirror");
+    let config = Config::load(&root).unwrap_or_default();
+    let _ = index::run(&root, &config, false);
+
+    let vendor = std::fs::read_to_string(root.join("sources/vendor/index.md")).unwrap_or_default();
+    assert!(
+        vendor.contains("* [Press Relay overview](press-relay.md)"),
+        "{vendor}"
+    );
+    assert!(
+        vendor.contains("* [Widget Press API](widget-press.md)"),
+        "{vendor}"
+    );
+    assert!(!vendor.contains("Some Site"), "{vendor}");
+
+    // An authored page outside the mirror whose title carries the same tail
+    // keeps it. Without this the rule reads as "strip this string anywhere",
+    // which is not what a mirror rule is.
+    let systems = std::fs::read_to_string(root.join("systems/index.md")).unwrap_or_default();
+    assert!(
+        systems.contains("* [Quiet Mill | Some Site](quiet-mill.md)"),
+        "{systems}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The retype pass over a bundle that is already typed: what it renames, what
+/// it refuses to decide, and the two prompt templates whose fenced `type:`
+/// exemplar a grep would have rewritten.
+#[test]
+fn a_retype_moves_the_type_and_nothing_else() {
+    let root = scratch_copy("retype", "retype");
+    let config = Config::load(&root).unwrap_or_default();
+    let plan = retype::plan(&root, &config).unwrap();
+
+    // Two meetings, two threads, one prompt template.
+    assert_eq!(plan.changes().count(), 5, "{:?}", plan.entries);
+    // `grep -c '^type: Meeting Summary'` over this bundle finds four lines and
+    // two documents. The other two are exemplars inside fenced code blocks in
+    // prompt templates, and the count is how you tell — measured the same way
+    // in the 757-file reference bundle, where it finds 68 against 67 documents.
+    assert_eq!(
+        plan.entries
+            .iter()
+            .filter(|entry| entry.from == "Meeting Summary")
+            .count(),
+        2,
+        "{:?}",
+        plan.entries
+    );
+    // The retired name and the one that maps to four names, and nothing else.
+    let judgements: Vec<&str> = plan.judgements().map(|(e, _)| e.path.as_str()).collect();
+    assert_eq!(
+        judgements,
+        [
+            "knowledge-base/02-architecture/order-intake.md",
+            "toolkit/00-index.md"
+        ]
+    );
+    // `System` survives the rename table under its own name, so the table does
+    // not mention it and the report says so rather than staying silent.
+    assert_eq!(plan.unnamed_types(), [("System", 1)].into_iter().collect());
+    assert!(plan.unparseable.is_empty(), "{:?}", plan.unparseable);
+
+    assert_eq!(retype::apply(&root, &plan).unwrap(), 5);
+
+    // Quoting, key spacing and every other byte are the file's own.
+    let quoted = read(&root, "meetings/2026-01-15-relay-review.md");
+    assert!(quoted.contains("type: \"Meeting\"\n"), "{quoted}");
+    assert!(quoted.contains("title:   \"Relay review\"\n"), "{quoted}");
+    let bare = read(&root, "meetings/2026-01-20-intake.md");
+    assert!(bare.contains("type: Meeting\n"), "{bare}");
+    let single = read(&root, "mill-thread.md");
+    assert!(single.contains("type: 'Correspondence'\n"), "{single}");
+
+    // The trap. One template's own type is renamed and its exemplar is not;
+    // the other has no frontmatter at all and is never touched.
+    let template = read(&root, "templates/meeting-prompt.md");
+    assert!(template.contains("type: Template\n"), "{template}");
+    assert!(
+        template.contains("```yaml\ntype: Meeting Summary\n"),
+        "{template}"
+    );
+    assert_eq!(
+        read(&root, "templates/no-frontmatter-prompt.md"),
+        std::fs::read_to_string(fixture("retype").join("templates/no-frontmatter-prompt.md"))
+            .unwrap()
+    );
+
+    // A retired name keeps the field §11 requires. Nothing here deletes a
+    // `type`, so a person retypes or deletes the file and the pass says which.
+    let retired = read(&root, "toolkit/00-index.md");
+    assert!(retired.contains("type: \"Toolkit Index\"\n"), "{retired}");
+
+    // Run twice, `git diff --exit-code` clean.
+    let second = retype::plan(&root, &config).unwrap();
+    assert_eq!(second.changes().count(), 0, "{:?}", second.entries);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+fn read(root: &Path, relative: &str) -> String {
+    std::fs::read_to_string(root.join(relative)).unwrap_or_default()
 }
