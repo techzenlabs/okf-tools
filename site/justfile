@@ -1,0 +1,33 @@
+# The site recipes, identical in every tenant because they ship from
+# okf-tools. `okf-assemble` rewrites this file on every run, so a fix reaches
+# four tenants by rolling one flake input forward rather than by four commits.
+#
+# Nothing here holds a credential. The CI job fetches the bundles and drops
+# its tokens before it reaches `just build`, so a template bug has nothing to
+# exfiltrate.
+
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+# Assemble, scan, render and index. The whole build.
+build:
+    okf-assemble
+    okf-scan content
+    hugo
+    okf-assemble --verify-raw
+    pagefind --site public
+
+# The same pipeline against a working tree, for authoring. `--local` is an
+# argument and is never written to site.toml: when a working tree and the
+# pinned rev disagree, the manifest wins.
+serve *ARGS:
+    okf-assemble {{ ARGS }}
+    hugo server --bind 127.0.0.1 --port 1313 --disableFastRender
+
+# Every gate this repository has.
+check:
+    nix flake check
+
+# The assembled bundle as one file, for an agent that wants everything in one
+# request rather than one per page.
+bundle:
+    okf-assemble --tarball

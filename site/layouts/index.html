@@ -1,0 +1,78 @@
+{{- /*
+  The tenant root: the assembled bundles, then everything grouped by kind.
+
+  `GroupBy "Type"` needs no taxonomy and no second front-matter key, because
+  Hugo's reserved `type` field *is* OKF's `type`. One line therefore groups
+  across every mounted bundle at once. Two measured details:
+
+  * `GroupBy` returns group objects, not a map. Ranging it as `$k, $v` fails
+    the build with `range can't iterate over Pages`, which is at least loud.
+  * A page with no `type` reports its section as `.Type`, so an untyped
+    document groups under its bundle id rather than vanishing. §11 forbids
+    rejecting it, and this is where it goes.
+*/ -}}
+{{ define "main" }}
+<h1>{{ site.Title }}</h1>
+{{ .Content }}
+
+<section class="okf-search">
+  <label for="okf-q">Search</label>
+  <input id="okf-q" type="search" autocomplete="off" placeholder="search this site" />
+  <ul id="okf-results"></ul>
+</section>
+
+<section class="okf-bundles">
+  <h2>Bundles</h2>
+  <ul>
+    {{- range site.Sections }}
+    <li>
+      <a href="{{ .RelPermalink }}">
+        {{- partial "okf-meta.html" (dict "page" . "region" "title") -}}
+      </a>
+      &mdash; {{ len .RegularPagesRecursive }} page(s)
+    </li>
+    {{- end }}
+  </ul>
+</section>
+
+<section class="okf-types">
+  <h2>By kind</h2>
+  {{- range site.RegularPages.GroupBy "Type" }}
+  <h3>{{ .Key }}</h3>
+  <ul>
+    {{- range .Pages }}
+    <li>
+      <a href="{{ .RelPermalink }}">{{ .Title }}</a>
+      {{- with .Params.description }} &mdash; {{ . }}{{ end }}
+    </li>
+    {{- end }}
+  </ul>
+  {{- end }}
+</section>
+
+{{- /* Pagefind writes its own bundle into `public/pagefind/` after Hugo has
+       run, so this loads at read time and never at build time. */ -}}
+<script type="module">
+  const box = document.getElementById("okf-q");
+  const out = document.getElementById("okf-results");
+  let engine = null;
+  box.addEventListener("input", async () => {
+    if (!engine) {
+      engine = await import("{{ "pagefind/pagefind.js" | relURL }}");
+      await engine.init();
+    }
+    const search = await engine.search(box.value);
+    const hits = await Promise.all(search.results.slice(0, 10).map((r) => r.data()));
+    out.replaceChildren(
+      ...hits.map((h) => {
+        const li = document.createElement("li");
+        const a = document.createElement("a");
+        a.href = h.url;
+        a.textContent = h.meta.title || h.url;
+        li.append(a);
+        return li;
+      }),
+    );
+  });
+</script>
+{{ end }}

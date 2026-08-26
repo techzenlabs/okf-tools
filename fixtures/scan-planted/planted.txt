@@ -1,0 +1,11 @@
+Synthetic. This is not a key, and the base64 below decodes to a sentence
+saying so.
+
+-----BEGIN RSA PRIVATE KEY-----
+VGhpcyBpcyBhIHN5bnRoZXRpYyBmaXh0dXJlLCBub3QgYSBrZXkuIElmIHlvdSBhcmUgcmVhZGlu
+ZyBpdCBiZWNhdXNlIGEgc2Nhbm5lciBmaXJlZCwgdGhlIHNjYW5uZXIgd29ya2VkLg==
+-----END RSA PRIVATE KEY-----
+
+A labelled identifier in the shape the detector looks for:
+
+SSN: 000-00-0000

@@ -1,0 +1,11 @@
+{{- /*
+  A `mermaid` fence becomes a `<pre>` the browser bundle finds, and sets the
+  flag `baseof.html` reads after the content block to decide whether this page
+  pays for the script.
+
+  `{{ .Inner }}` and never `{{ .Inner | htmlEscape }}`. Hugo escapes template
+  output already, so escaping first renders `A--&amp;gt;B`, whose text content
+  is the literal `A--&gt;B` rather than an arrow. Every diagram in the estate
+  uses `-->`, so that one filter breaks all of them at once.
+*/ -}}
+<pre class="mermaid">{{ .Inner }}</pre>{{ .Page.Store.Set "hasMermaid" true }}

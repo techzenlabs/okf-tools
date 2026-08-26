@@ -16,6 +16,14 @@ name = "okf-index"
 path = "src/bin/okf-index.rs"
 
 [[bin]]
+name = "okf-assemble"
+path = "src/bin/okf-assemble.rs"
+
+[[bin]]
+name = "okf-scan"
+path = "src/bin/okf-scan.rs"
+
+[[bin]]
 name = "okf-migrate"
 path = "src/bin/okf-migrate.rs"
 
