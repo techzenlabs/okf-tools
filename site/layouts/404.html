@@ -1,0 +1,29 @@
+{{- /*
+  What a reader sees for a path that is not there.
+
+  Measured with this file removed: Hugo publishes nothing at `/404.html` at
+  all, and `hugo server` answers a missing path with its own built-in page,
+  default serif on white with no stylesheet, no header and no link anywhere. Defining the
+  main block is enough to replace it; `baseof.html` supplies the shell, the
+  stylesheet and the footer.
+
+  `data-pagefind-ignore` because Hugo writes `public/404.html` and Pagefind
+  indexes every HTML file it finds, so without it "not found" is a search hit.
+
+  Hugo writes the file; mapping a missing path onto it is the serving layer's
+  job and a deploy note per tenant.
+*/ -}}
+{{ define "main" }}
+<article class="okf-page" data-pagefind-ignore>
+  <h1>Page not found</h1>
+  <p>
+    There is nothing at this address. It may have moved when its bundle was
+    reorganised, or the link that brought you here may be older than the
+    document it points at.
+  </p>
+  <p>
+    <a href="{{ "/" | relURL }}">Start from the front page</a>, which lists
+    every bundle and carries the search box.
+  </p>
+</article>
+{{ end }}

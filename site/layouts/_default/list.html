@@ -5,24 +5,35 @@
   `index.md`, so the human listing and the site navigation agree by
   construction. `.Content` is empty for a term page and for a directory that
   carries no `index.md`, which §11 permits, so the fallback below lists the
-  pages Hugo found rather than showing a reader an empty page.
+  pages Hugo found rather than showing a reader an empty page — and when
+  there are none of those either, a sentence rather than an empty `<ul>`.
+  §11 says render it; rendering it politely is allowed.
+
+  The fallback links through the `title` region for the same reason the
+  breadcrumb does: a subsection has no `title` to link with, and `.Title`
+  alone produced an anchor with no text inside it.
 */ -}}
 {{ define "main" }}
 <section class="okf-section">
   {{- if not (strings.Contains .Content "<h1") }}
   <h1>{{ partial "okf-meta.html" (dict "page" . "region" "title") }}</h1>
   {{- end }}
-  {{- with .Params.description }}<p class="okf-description">{{ . }}</p>{{ end }}
+  {{- partial "okf-meta.html" (dict "page" . "region" "summary" "class" "okf-description") }}
   {{ .Content }}
   {{- if not .Content }}
-  <ul class="okf-fallback">
+  {{- if .Pages }}
+  <ul class="okf-fallback okf-listing">
     {{- range .Pages }}
     <li>
-      <a href="{{ .RelPermalink }}">{{ .Title }}</a>
-      {{- with .Params.description }} &mdash; {{ . }}{{ end }}
+      <a href="{{ .RelPermalink }}">{{ partial "okf-meta.html" (dict "page" . "region" "title") }}</a>
+      {{- partial "okf-meta.html" (dict "page" . "region" "summary") }}
     </li>
     {{- end }}
   </ul>
+  {{- else }}
+  <p class="okf-empty">Nothing is filed under
+    {{ partial "okf-meta.html" (dict "page" . "region" "title") }} yet.</p>
+  {{- end }}
   {{- end }}
 </section>
 {{ end }}
