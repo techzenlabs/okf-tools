@@ -1,0 +1,172 @@
+{{- /*
+  The search box, its filters, and the only client-side JavaScript on the
+  site.
+
+  This is a partial rather than a block in `index.html` because it stopped
+  being the root page's private business the day "By kind" moved into it.
+  Mounting it on every page is one call in `baseof.html`; that is a separate
+  decision and this is what makes it a one-line one.
+
+  WHY THE FILTERS REPLACED A LISTING. The root used to print every regular
+  page grouped by `type`. On a 704-document tenant that is 705 list items,
+  led by 394 work logs in alphabetical order, with the five governance
+  documents somewhere past the tenth screen. Grouping by type also erases the
+  bundle a page came from, which on a three-bundle tenant puts three systems'
+  architecture notes in one undifferentiated list.
+
+  The type facet was already in the Pagefind index on every page, so the
+  browse the listing offered is available here and is strictly larger: a
+  reader can ask for runbooks, or for human-reviewed pages, or for both, over
+  any corpus size, and the answer arrives without the page having shipped the
+  corpus.
+
+  WHY AN EMPTY QUERY IS A SEARCH. `engine.search(null, {filters})` returns
+  everything matching the filters, which is exactly the browse the listing
+  did. Without it a filter would only narrow a query, and "show me the
+  runbooks" would need words nobody has.
+
+  WHY THIS FAILS QUIETLY. Pagefind runs after Hugo, so `hugo server` — which
+  is `just serve`, which is how anyone authors — has no `pagefind/` directory
+  at all. The import throws there, and it must not take the page with it: the
+  filter row stays hidden and the box keeps its own placeholder. The built
+  site is where this works, and the fixture asserts it there.
+*/ -}}
+<section class="okf-search">
+  <label for="okf-q">Search</label>
+  <input id="okf-q" type="search" autocomplete="off" placeholder="search this site" />
+  <div id="okf-filters" class="okf-filters" hidden>
+    <span class="okf-filter">
+      <label for="okf-f-type">Kind</label>
+      <select id="okf-f-type" data-pagefind-key="type"><option value="">any</option></select>
+    </span>
+    <span class="okf-filter">
+      <label for="okf-f-trust">Trust</label>
+      <select id="okf-f-trust" data-pagefind-key="trust"><option value="">any</option></select>
+    </span>
+    <button type="button" id="okf-clear">Clear</button>
+  </div>
+  <p id="okf-tally" class="okf-tally" hidden></p>
+  <ul id="okf-results" class="okf-listing"></ul>
+</section>
+
+<script type="module">
+  const box = document.getElementById("okf-q");
+  const row = document.getElementById("okf-filters");
+  const selects = [...row.querySelectorAll("select[data-pagefind-key]")];
+  const clear = document.getElementById("okf-clear");
+  const tally = document.getElementById("okf-tally");
+  const out = document.getElementById("okf-results");
+
+  // How many hits are rendered. The tally says how many there are, so a
+  // reader is never told a filter matched ten things when it matched three
+  // hundred.
+  const SHOWN = 50;
+
+  let engine = null;
+
+  async function ready() {
+    if (engine) return engine;
+    const loaded = await import("{{ "pagefind/pagefind.js" | relURL }}");
+    await loaded.init();
+    engine = loaded;
+    return engine;
+  }
+
+  function chosen() {
+    const filters = {};
+    for (const select of selects) {
+      if (select.value) filters[select.dataset.pagefindKey] = [select.value];
+    }
+    return filters;
+  }
+
+  function render(hits, total) {
+    out.replaceChildren(
+      ...hits.map((h) => {
+        const li = document.createElement("li");
+        const a = document.createElement("a");
+        a.href = h.url;
+        a.textContent = h.meta.title || h.url;
+        li.append(a);
+        // Pagefind escapes the excerpt and marks the match with <mark>, which
+        // is the one reason this is innerHTML and not textContent. A title
+        // alone made every hit on a 704-page corpus look the same.
+        if (h.excerpt) {
+          const p = document.createElement("p");
+          p.className = "okf-summary";
+          p.innerHTML = h.excerpt;
+          li.append(p);
+        }
+        return li;
+      }),
+    );
+    tally.hidden = false;
+    const noun = total === 1 ? "document" : "documents";
+    tally.textContent =
+      total > hits.length
+        ? `${total} ${noun}, showing the first ${hits.length}`
+        : `${total} ${noun}`;
+  }
+
+  async function run() {
+    const query = box.value.trim();
+    const filters = chosen();
+    if (!query && Object.keys(filters).length === 0) {
+      out.replaceChildren();
+      tally.hidden = true;
+      return;
+    }
+    const search = await (await ready()).search(query || null, { filters });
+    const hits = await Promise.all(
+      search.results.slice(0, SHOWN).map((r) => r.data()),
+    );
+    render(hits, search.results.length);
+  }
+
+  box.addEventListener("input", () => {
+    run().catch(() => {});
+  });
+  for (const select of selects) {
+    select.addEventListener("change", () => {
+      run().catch(() => {});
+    });
+  }
+  clear.addEventListener("click", () => {
+    box.value = "";
+    for (const select of selects) select.value = "";
+    out.replaceChildren();
+    tally.hidden = true;
+  });
+
+  // The filter row only appears once its options are real. An empty <select>
+  // labelled "Kind" is worse than no filter row at all, and on `hugo server`
+  // there is no index to fill it from.
+  (async () => {
+    const available = await (await ready()).filters();
+    let filled = false;
+    for (const select of selects) {
+      const counts = available[select.dataset.pagefindKey] || {};
+      const values = Object.keys(counts)
+        .filter((value) => counts[value] > 0)
+        .sort();
+      // Two, not one. A control offering a single value narrows nothing —
+      // gill's whole corpus is `trust: unverified`, so a Trust select there
+      // is a control that cannot change the answer, sitting beside one that
+      // can.
+      if (values.length < 2) {
+        select.closest(".okf-filter").hidden = true;
+        continue;
+      }
+      filled = true;
+      select.append(
+        ...values.map((value) => {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = `${value} (${counts[value]})`;
+          return option;
+        }),
+      );
+    }
+    if (filled) row.hidden = false;
+  })().catch(() => {});
+</script>

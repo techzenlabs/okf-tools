@@ -134,6 +134,88 @@ h1, h2, h3 { line-height: 1.25; }
   color: inherit;
 }
 
+/* The filter row sits under the box and wraps, because "Kind" on a corpus
+   with twenty types is a wide control and a phone is not. It is `hidden`
+   until its options are real: `hugo server` has no Pagefind index to fill it
+   from, and an empty select labelled "Kind" is worse than no row. */
+.okf-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 0.9rem;
+  margin-block-start: 0.6rem;
+  font-size: 0.85rem;
+}
+
+.okf-filters[hidden] { display: none; }
+.okf-filter[hidden] { display: none; }
+.okf-filter label { color: var(--okf-muted); margin-inline-end: 0.3rem; }
+
+.okf-filters select,
+.okf-filters button {
+  font: inherit;
+  padding: 0.2rem 0.35rem;
+  border: 1px solid var(--okf-rule);
+  border-radius: 4px;
+  background: var(--okf-bg);
+  color: inherit;
+}
+
+.okf-filters button { cursor: pointer; color: var(--okf-link); }
+
+.okf-tally {
+  margin: 0.7rem 0 0.2rem;
+  color: var(--okf-muted);
+  font-size: 0.85rem;
+}
+
+.okf-tally[hidden] { display: none; }
+
+/* One card per bundle, and the whole front door. Two columns where there is
+   room and one where there is not; a single-bundle tenant gets one card and
+   that is the intended spare, because the card's job is to hand the reader to
+   a landing page that already carries a curated introduction. */
+.okf-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 0.9rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.okf-card {
+  border: 1px solid var(--okf-rule);
+  border-radius: 6px;
+  padding: 0.8rem 0.9rem 0.7rem;
+}
+
+.okf-card h3 { margin: 0; font-size: 1rem; }
+.okf-card h3 a { text-decoration: none; }
+.okf-card h3 a:hover,
+.okf-card h3 a:focus { text-decoration: underline; }
+
+/* Three lines rather than the listing's two. A bundle description is one of
+   a handful on the page and it is the only prose a reader gets before
+   choosing where to go. */
+.okf-card-summary {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  margin: 0.35rem 0 0;
+  color: var(--okf-muted);
+  font-size: 0.9rem;
+}
+
+.okf-count {
+  margin: 0.5rem 0 0;
+  color: var(--okf-muted);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
 pre,
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 

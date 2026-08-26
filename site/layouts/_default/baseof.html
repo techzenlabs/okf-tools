@@ -48,9 +48,13 @@
 
     <main data-pagefind-body>
       {{ block "main" . }}{{ end }}
-      {{- /* Every page but the one that is not a page: trust and staleness
-             are claims about a document, and the 404 has none. */}}
-      {{- if ne .Kind "404" }}
+      {{- /* Every page but the two that are not documents. Trust and
+             staleness are claims a document makes about itself; the 404 has
+             none to make, and neither does the front door, which since the
+             card grid replaced the listing carries no document at all. A
+             tenant root reading `TRUST: unverified` invited the reader to
+             distrust the site rather than a page. */}}
+      {{- if and (ne .Kind "404") (not .IsHome) }}
       {{- partial "okf-meta.html" (dict "page" . "region" "facets") }}
       {{- end }}
     </main>

@@ -1,100 +1,67 @@
 {{- /*
-  The tenant root: the assembled bundles, then everything grouped by kind.
+  The tenant root: the search box with its filters, then one card per bundle.
 
-  `GroupBy "Type"` needs no taxonomy and no second front-matter key, because
-  Hugo's reserved `type` field *is* OKF's `type`. One line therefore groups
-  across every mounted bundle at once. Two measured details:
+  WHAT LEFT, AND WHY. This page used to print every regular page grouped by
+  `type` under a "By kind" heading. Measured on gill: 705 list items, led by
+  394 work logs in alphabetical order, with the five governance documents
+  below 85 execution plans and past the tenth screen. On a three-bundle
+  tenant the same grouping erased which system each page belonged to, so
+  "Platform overview" gave a reader no way to know of what.
 
-  * `GroupBy` returns group objects, not a map. Ranging it as `$k, $v` fails
-    the build with `range can't iterate over Pages`, which is at least loud.
-  * A page with no `type` reports its section as `.Type`, so an untyped
-    document groups under its bundle id rather than vanishing. §11 forbids
-    rejecting it, and this is where it goes.
+  Type grouping is also the weaker axis structurally. A bundle root has a
+  page, a curated title and a description — §8 allows front matter exactly
+  there — so a bundle can be a link. A type has no page at all, so a "By
+  kind" heading could only ever be a label over a dump.
 
-  Both listings carry `data-pagefind-ignore`. Measured on a 704-document
-  tenant: the index held 874 pages, because this page's own copy of the whole
-  corpus is a page too, and a search for any common word returned the root
-  before the document it came from. Ignoring the listings costs nothing —
-  every entry here is a link to a page that is indexed in its own right.
+  So the browse moved to the search filters, where the `type` facet already
+  was on every page, and where it answers "only runbooks" over any corpus
+  size. `okf-search.html` carries that.
 
-  Descriptions render through the partial's `summary` region rather than
-  inline, which is where the rule that they are markdown and never raw HTML
-  has its one definition. As plain text they put literal backticks on the
-  front page of every corpus that opens a description with a status field.
-  The clamp in `okf.css` holds a lead-paragraph-length one to two lines.
+  WHAT THIS SCALES ON. The bundle count is the number a human curates. The
+  page count is the number that grows on its own. Sixteen times the corpus
+  changed nothing about the bundle list, which is the property that makes
+  this a front door rather than a listing that will need replacing again.
+
+  A single-bundle tenant gets one card, and that is the correct spare: the
+  card links to the bundle landing page, which already carries a curated
+  introduction and the section list. `.Content` above renders the assembled
+  root `index.md`, which is the sanctioned place for per-tenant front-door
+  prose.
+
+  `data-pagefind-ignore` on the card list. Measured on a 704-document tenant
+  before it: the index held 874 pages, because this page's own copy of the
+  corpus is a page too, and a search for a common word returned the root
+  ahead of the document the words came from.
 */ -}}
 {{ define "main" }}
 <h1>{{ site.Title }}</h1>
 {{ .Content }}
 
-<section class="okf-search">
-  <label for="okf-q">Search</label>
-  <input id="okf-q" type="search" autocomplete="off" placeholder="search this site" />
-  <ul id="okf-results" class="okf-listing"></ul>
-</section>
+{{ partial "okf-search.html" . }}
 
 <section class="okf-bundles" data-pagefind-ignore>
   <h2>Bundles</h2>
-  <ul>
-    {{- range site.Sections }}
-    {{- $n := len .RegularPagesRecursive }}
-    <li>
-      <a href="{{ .RelPermalink }}">
-        {{- partial "okf-meta.html" (dict "page" . "region" "title") -}}
-      </a>
-      &mdash; {{ $n }} page{{ if ne $n 1 }}s{{ end }}
-    </li>
-    {{- end }}
-  </ul>
-</section>
-
-<section class="okf-types" data-pagefind-ignore>
-  <h2>By kind</h2>
-  {{- range site.RegularPages.GroupBy "Type" }}
-  <h3>{{ .Key }}</h3>
-  <ul class="okf-listing">
-    {{- range .Pages }}
-    <li>
-      <a href="{{ .RelPermalink }}">{{ partial "okf-meta.html" (dict "page" . "region" "title") }}</a>
-      {{- partial "okf-meta.html" (dict "page" . "region" "summary") }}
-    </li>
-    {{- end }}
-  </ul>
+  {{- /* Ordered by the name a reader sees, which is not `.Title`: a bundle
+         root need not carry front matter, and one that does not falls back
+         to its humanised directory name. Sorting on `.Title` therefore put
+         every titleless bundle first, in a block, above the curated ones —
+         and the order changed when a bundle gained a title. */ -}}
+  {{- $cards := slice }}
+  {{- range site.Sections }}
+  {{- $cards = $cards | append (dict
+      "page" .
+      "name" (partial "okf-meta.html" (dict "page" . "region" "title"))) }}
   {{- end }}
+  <ul class="okf-cards">
+    {{- range sort $cards "name" }}
+    {{- $section := .page }}
+    {{- $n := len $section.RegularPagesRecursive }}
+    <li class="okf-card">
+      <h3><a href="{{ $section.RelPermalink }}">{{ .name }}</a></h3>
+      {{- partial "okf-meta.html" (dict "page" $section "region" "summary" "class" "okf-card-summary") }}
+      <p class="okf-count">{{ $n }} page{{ if ne $n 1 }}s{{ end }}</p>
+    </li>
+    {{- end }}
+  </ul>
 </section>
-
-{{- /* Pagefind writes its own bundle into `public/pagefind/` after Hugo has
-       run, so this loads at read time and never at build time. */ -}}
-<script type="module">
-  const box = document.getElementById("okf-q");
-  const out = document.getElementById("okf-results");
-  let engine = null;
-  box.addEventListener("input", async () => {
-    if (!engine) {
-      engine = await import("{{ "pagefind/pagefind.js" | relURL }}");
-      await engine.init();
-    }
-    const search = await engine.search(box.value);
-    const hits = await Promise.all(search.results.slice(0, 10).map((r) => r.data()));
-    out.replaceChildren(
-      ...hits.map((h) => {
-        const li = document.createElement("li");
-        const a = document.createElement("a");
-        a.href = h.url;
-        a.textContent = h.meta.title || h.url;
-        li.append(a);
-        // Pagefind escapes the excerpt and marks the match with <mark>, which
-        // is the one reason this is innerHTML and not textContent. A title
-        // alone made every hit on a 704-page corpus look the same.
-        if (h.excerpt) {
-          const p = document.createElement("p");
-          p.className = "okf-summary";
-          p.innerHTML = h.excerpt;
-          li.append(p);
-        }
-        return li;
-      }),
-    );
-  });
-</script>
 {{ end }}

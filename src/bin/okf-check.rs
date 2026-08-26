@@ -17,7 +17,8 @@ fn main() -> ExitCode {
 }
 
 const USAGE: &str = "usage: okf-check [--quiet] [--as-of=YYYY-MM-DD]\n\
-     \x20      okf-check --layouts\n\n\
+     \x20      okf-check --layouts\n\
+     \x20      okf-check --shared-paths\n\n\
      Validates the bundle against OKF v0.2. --quiet suppresses warnings.\n\
      --as-of measures `stale_after` against the given day instead of the one\n\
      in .gate-as-of, without committing anything. That file is what the gate\n\
@@ -25,15 +26,24 @@ const USAGE: &str = "usage: okf-check [--quiet] [--as-of=YYYY-MM-DD]\n\
      the build machine's calendar; this flag is how a person or a scheduled\n\
      bump job asks what today would say.\n\
      --layouts checks a tenant site repository instead: it fails when the\n\
-     repository tracks a file whose path okf-tools owns.";
+     repository tracks a file whose path okf-tools owns, and when it neither\n\
+     tracks nor ignores one.\n\
+     --shared-paths prints those paths, one per line, which is what a\n\
+     tenant's .gitignore has to name.";
 
 /// The `--as-of=` prefix, spelt once.
 const AS_OF_FLAG: &str = "--as-of=";
 
 fn run() -> anyhow::Result<ExitCode> {
-    if let Some(bad) = unknown_argument(&["--quiet", "--layouts"]) {
+    if let Some(bad) = unknown_argument(&["--quiet", "--layouts", "--shared-paths"]) {
         eprintln!("okf-check: unrecognised argument `{bad}`\n\n{USAGE}");
         return Ok(ExitCode::FAILURE);
+    }
+    if std::env::args().any(|a| a == "--shared-paths") {
+        for path in okf_tools::layouts::owned_paths() {
+            println!("/{path}");
+        }
+        return Ok(ExitCode::SUCCESS);
     }
     if std::env::args().any(|a| a == "--layouts") {
         return Ok(check_layouts());
@@ -116,24 +126,53 @@ fn check_layouts() -> ExitCode {
         return ExitCode::FAILURE;
     };
     let forked = okf_tools::layouts::forked(tracked.lines());
-    if forked.is_empty() {
+    if !forked.is_empty() {
+        println!("{} forked layout file(s):", forked.len());
+        for path in &forked {
+            println!("  {path}");
+        }
         println!(
-            "no forked layouts — okf-tools owns {} shared file(s), and this \
-             repository tracks none of them.",
-            okf_tools::layouts::owned_paths().len()
+            "\nokf-assemble writes these on every build, so a tracked copy \
+             shadows the shared one and stops receiving its fixes. Delete the \
+             copy, or add the change to okf-tools where four tenants get it."
         );
-        return ExitCode::SUCCESS;
+        return ExitCode::FAILURE;
     }
-    println!("{} forked layout file(s):", forked.len());
-    for path in &forked {
-        println!("  {path}");
+
+    let Some(ignored) = ignored_paths() else {
+        eprintln!(
+            "okf-check: --layouts asks git which of the shared paths this \
+             repository ignores, and git did not answer."
+        );
+        return ExitCode::FAILURE;
+    };
+    let unignored = okf_tools::layouts::unignored(tracked.lines(), ignored.lines());
+    if !unignored.is_empty() {
+        println!(
+            "{} shared file(s) this repository neither tracks nor ignores:",
+            unignored.len()
+        );
+        for path in &unignored {
+            println!("  {path}");
+        }
+        println!(
+            "\nokf-assemble writes these on every build, so each one sits in \
+             the working tree as an untracked file and one `git add -A` makes \
+             it the fork the check above refuses. Name them in .gitignore. \
+             This fires when okf-tools adds a file to the shared set, which \
+             is exactly when four .gitignore files are all out of date at \
+             once. `okf-check --shared-paths` prints the whole set in the \
+             form .gitignore wants."
+        );
+        return ExitCode::FAILURE;
     }
+
     println!(
-        "\nokf-assemble writes these on every build, so a tracked copy \
-         shadows the shared one and stops receiving its fixes. Delete the \
-         copy, or add the change to okf-tools where four tenants get it."
+        "no forked layouts — okf-tools owns {} shared file(s), this \
+         repository tracks none of them, and ignores every one.",
+        okf_tools::layouts::owned_paths().len()
     );
-    ExitCode::FAILURE
+    ExitCode::SUCCESS
 }
 
 /// What git says this repository tracks.
@@ -151,6 +190,33 @@ fn tracked_files() -> Option<String> {
         .status
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Which of the paths okf-tools owns this repository's `.gitignore` covers.
+///
+/// `git check-ignore --stdin` answers for paths that need not exist, which
+/// matters: a fresh clone has no `layouts/` at all until `okf-assemble` runs,
+/// and the question is about the ignore file rather than about the disk. It
+/// exits 1 when it matches nothing, which is not an error here — it means the
+/// repository ignores none of them, and every one is then reported.
+fn ignored_paths() -> Option<String> {
+    use std::io::Write as _;
+
+    let mut child = std::process::Command::new("git")
+        .args(["check-ignore", "--stdin"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .ok()?;
+    let owned = okf_tools::layouts::owned_paths().join("\n");
+    child.stdin.take()?.write_all(owned.as_bytes()).ok()?;
+    let output = child.wait_with_output().ok()?;
+    // 0 = some matched, 1 = none matched, anything else is a real failure.
+    match output.status.code() {
+        Some(0 | 1) => Some(String::from_utf8_lossy(&output.stdout).into_owned()),
+        _ => None,
+    }
 }
 
 fn unknown_argument(accepted: &[&str]) -> Option<String> {
