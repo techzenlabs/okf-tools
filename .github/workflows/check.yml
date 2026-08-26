@@ -1,0 +1,79 @@
+# Every gate this repository has, run on every push and every pull request.
+#
+# WHY THIS EXISTS. Fifteen repositories pin okf-tools and nothing checked it.
+# Every green in its history is a green somebody produced by hand on one
+# machine, and the day that stops happening is a day nobody notices. Issue #11.
+#
+# WHY EACH DERIVATION IS BUILT BY NAME. `nix flake check` reports green on a
+# tree it did not build: it evaluates, and a derivation whose output is already
+# in the store or the cache is "checked" without running. Twenty-two instances
+# of that failure mode are inventoried in mikeslade/dotfiles#202, and the ones
+# that pass vacuously are worse than the ones that turn red. Naming each
+# derivation forces it.
+#
+# WHY THE FLEET AND NOT A HOSTED RUNNER. Hosted Actions on this org return a
+# red X in two seconds without running a line — a billing state, not a
+# configuration. The fleet is the estate's own, and the four site repositories
+# already target it. **This workflow cannot run until the fleet's app
+# allowlists this repository**, which is a permission and a spend decision
+# rather than a file. Until then it is verified the way the tenants' workflows
+# are: by actionlint, in a derivation, on every branch.
+
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push supersedes the first. These derivations take minutes and there
+# is one fleet.
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    runs-on: [ria-fleet]
+
+    steps:
+      # No submodules anywhere in this design, so this is the whole checkout.
+      # `persist-credentials: false` keeps the Actions token out of
+      # .git/config, where every later step would inherit it.
+      - name: Check out this repository, and nothing else
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          submodules: false
+
+      # Named one by one, deliberately. A loop would let a typo in a name
+      # silently check nothing, and the whole point of the list is that it is
+      # the list.
+      - name: The library, its 226 tests, clippy and rustfmt
+        run: nix build --no-link --print-build-logs .#checks.x86_64-linux.okf-tools
+
+      - name: The whole site pipeline, assembled, scanned, rendered and indexed
+        run: nix build --no-link --print-build-logs .#checks.x86_64-linux.site-pipeline
+
+      - name: A page beside a same-named directory is refused
+        run: nix build --no-link --print-build-logs .#checks.x86_64-linux.section-collision
+
+      - name: A leaf bundle is renamed rather than silently dropped
+        run: nix build --no-link --print-build-logs .#checks.x86_64-linux.leaf-bundle-rename
+
+      - name: A manifest's pinned commit is the one that gets built
+        run: nix build --no-link --print-build-logs .#checks.x86_64-linux.pinned-commit
+
+      # The scanner is believed only after it has been watched failing, which
+      # is what this one does before it accepts any clean run.
+      - name: okf-scan fails on the planted fixture before it passes anything
+        run: nix build --no-link --print-build-logs .#checks.x86_64-linux.scan-negative-control
+
+      - name: This repository is public, so it scans itself
+        run: nix build --no-link --print-build-logs .#checks.x86_64-linux.self-scan
+
+      - name: A tenant may not fork a shared layout, or fail to ignore one
+        run: nix build --no-link --print-build-logs .#checks.x86_64-linux.layout-fork

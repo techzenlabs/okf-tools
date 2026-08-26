@@ -114,6 +114,24 @@
           self-scan = mkCheck "self-scan" ./nix/checks/self-scan.sh {
             SOURCE = ./.;
           };
+
+          # The workflow is the one file here that cannot be verified by
+          # running it: hosted Actions on this org refuse to start over
+          # billing, and the self-hosted fleet has not allowlisted this
+          # repository. A static check is the only verification available, so
+          # it is wired in rather than run once by hand — the same reasoning,
+          # and the same derivation, as in all four tenant repositories.
+          workflow =
+            pkgs.runCommand "workflow" {
+              nativeBuildInputs = [pkgs.actionlint];
+            } ''
+              cd ${self}
+              # Named explicitly, both of them. actionlint discovers workflows
+              # and its config by walking up to a git root, and a store path
+              # has neither.
+              actionlint -config-file .github/actionlint.yaml .github/workflows/check.yml
+              touch $out
+            '';
         };
       in {
         packages.okf-tools = okf-tools;
