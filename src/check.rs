@@ -127,6 +127,10 @@ pub fn check_bundle(root: &Path, config: &Config) -> Result<Report, crate::confi
             ),
         }
 
+        if !config.paths.keep_readme {
+            check_readme_retired(&mut report, &name);
+        }
+
         // The confidentiality rules run over every file, reserved names
         // included: a hand-written root index carries links like any other
         // page, and the gate exists for the page nobody thought to check.
@@ -466,6 +470,32 @@ fn check_index(report: &mut Report, path: &str, text: &str, is_root: bool, confi
     }
     if body.lines().any(|line| line.starts_with("- ")) {
         report.err(path, "index.md entries use `*`, not `-` (§8)");
+    }
+}
+
+/// A `README.md` in a bundle that has retired the name.
+///
+/// `[paths] keep_readme` records a decision every adopting bundle makes: in a
+/// code repository the name is load-bearing, because a docs gate or GitHub
+/// itself depends on it; in a knowledge bundle §8's generated `index.md` takes
+/// the listing role and the README goes. The key used to record that decision
+/// and enforce nothing, so one adopting bundle set it to `false`
+/// while deleting every `README.md` by hand, and a reader of that config
+/// reasonably concluded the tool had done the retirement.
+///
+/// A warning rather than an error, and deleting nothing, which is the same
+/// line every other convention in this checker sits on. §11 conformance is
+/// three rules and this is not one of them; what makes it bite is
+/// `max_warnings`, which a bundle sets to what it reported when it adopted.
+/// A README that comes back raises the count and fails the gate.
+fn check_readme_retired(report: &mut Report, path: &str) {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    if name.eq_ignore_ascii_case("readme.md") {
+        report.warn(
+            path,
+            "README.md is still here and [paths] keep_readme is false; \
+             §8's generated index.md carries the listing in this bundle",
+        );
     }
 }
 

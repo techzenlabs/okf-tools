@@ -101,11 +101,17 @@ pub struct Paths {
     /// would truncate it, and a freshness gate would then fail closed. The
     /// generator emits the block or nobody does.
     pub generated: Vec<String>,
-    /// Whether `README.md` files survive migration in this bundle.
+    /// Whether `README.md` survives in this bundle.
     ///
     /// True for a code repository, where a docs gate or GitHub itself depends
     /// on the name; false for a knowledge bundle, where §8's generated
     /// `index.md` takes over the listing role.
+    ///
+    /// Read by `okf-check`, which warns on every `README.md` still present in
+    /// a bundle that set this to `false`. See
+    /// `check::check_readme_retired`. Nothing deletes a file over it:
+    /// the README-to-`index.md` move is the one genuinely destructive step in
+    /// this migration and it stays a reviewed commit somebody can revert.
     pub keep_readme: bool,
 }
 

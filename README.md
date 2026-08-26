@@ -84,6 +84,7 @@ types = ["Model Card"]              # names local to this bundle
 
 [paths]
 skip_names = ["node_modules", "__pycache__", "result"]
+keep_readme = true          # false retires the name; see below
 
 [index]
 root_keys = ["okf_version", "title", "description"]
@@ -101,6 +102,25 @@ title_strip = '\s*\|\s*Some Site\s*$'
 gates that go with it](#promotion-and-the-gates-that-go-with-it). Both default
 to inert, so a bundle that names neither behaves exactly as it did before they
 existed.
+
+### `keep_readme`, and where README retention actually lives
+
+`keep_readme` records a decision every adopting bundle makes. In a code
+repository the name is load-bearing, because a docs gate or GitHub itself
+depends on it. In a knowledge bundle §8's generated `index.md` takes the
+listing role and the README goes.
+
+`okf-check` warns on every `README.md` still present in a bundle that set the
+key to `false`. It deletes nothing: the README to `index.md` move is the one
+genuinely destructive step in an adoption, and it stays a reviewed commit
+somebody can revert. What makes the warning bite is `max_warnings`, which a
+bundle sets to the count it reported when it adopted, so a README that comes
+back raises the count and fails the gate.
+
+The key used to record that decision and enforce nothing, which is worse than
+either enforcing or deleting it. One bundle set `keep_readme = false` while
+deleting every `README.md` by hand, and a reader of that config reasonably
+concluded the tool had done the retirement.
 
 ### The four vocabularies
 

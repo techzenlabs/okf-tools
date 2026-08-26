@@ -761,3 +761,67 @@ fn a_hand_restated_draft_that_grows_an_owner_subkey_is_refused() {
 
     let _ = std::fs::remove_dir_all(destination.root.parent().unwrap_or(&destination.root));
 }
+
+/// `[paths] keep_readme` and the mirror `title_strip` were both declared in
+/// `okf.toml` and exercised by nothing — okf-tools#7 and #1. A key an adopting
+/// repository writes and believes is worse than no key, so both get a fixture.
+#[test]
+fn a_retired_readme_is_reported_and_a_kept_one_is_not() {
+    let (root, config) = load("conventions");
+    let report = check::check_bundle(&root, &config).unwrap();
+
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    let readme: Vec<&String> = report
+        .warnings
+        .iter()
+        .filter(|w| w.contains("keep_readme"))
+        .collect();
+    assert_eq!(readme.len(), 1, "{:?}", report.warnings);
+    assert!(readme[0].starts_with("README.md:"), "{readme:?}");
+
+    // The negative control, which is the half that says the key is read rather
+    // than the diagnostic hard-coded: the same bundle keeping the name reports
+    // nothing at all.
+    let keeping = Config {
+        paths: okf_tools::config::Paths {
+            keep_readme: true,
+            ..config.paths.clone()
+        },
+        ..config
+    };
+    let quiet = check::check_bundle(&root, &keeping).unwrap();
+    assert!(
+        !quiet.warnings.iter().any(|w| w.contains("keep_readme")),
+        "{:?}",
+        quiet.warnings
+    );
+}
+
+#[test]
+fn a_mirror_strips_the_site_tail_from_its_own_entries_and_no_others() {
+    let root = scratch_copy("conventions", "mirror");
+    let config = Config::load(&root).unwrap_or_default();
+    let _ = index::run(&root, &config, false);
+
+    let vendor = std::fs::read_to_string(root.join("sources/vendor/index.md")).unwrap_or_default();
+    assert!(
+        vendor.contains("* [Press Relay overview](press-relay.md)"),
+        "{vendor}"
+    );
+    assert!(
+        vendor.contains("* [Widget Press API](widget-press.md)"),
+        "{vendor}"
+    );
+    assert!(!vendor.contains("Some Site"), "{vendor}");
+
+    // An authored page outside the mirror whose title carries the same tail
+    // keeps it. Without this the rule reads as "strip this string anywhere",
+    // which is not what a mirror rule is.
+    let systems = std::fs::read_to_string(root.join("systems/index.md")).unwrap_or_default();
+    assert!(
+        systems.contains("* [Quiet Mill | Some Site](quiet-mill.md)"),
+        "{systems}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
