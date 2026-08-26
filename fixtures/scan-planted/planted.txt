@@ -9,3 +9,7 @@ ZyBpdCBiZWNhdXNlIGEgc2Nhbm5lciBmaXJlZCwgdGhlIHNjYW5uZXIgd29ya2VkLg==
 A labelled identifier in the shape the detector looks for:
 
 SSN: 000-00-0000
+
+And a SOPS-encrypted value, whose ciphertext decodes to nothing at all:
+
+password: ENC[AES256_GCM,data:Qm9i,iv:8g==,tag:1w==,type:str]

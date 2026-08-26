@@ -439,6 +439,20 @@ publication.
 The unformatted nine-digit rule is off by default. It fires on any nine
 adjacent digits, and in a repository full of commit hashes and pinned revisions
 that is mostly noise, so `--bare-9` turns it on where the corpus warrants it.
+
+The formatted-identifier rule requires the *same* separator twice. A real
+identifier is punctuated consistently, and the looser form read a pair of SVG
+path coordinates — `649.75 6196` — as one. That fired nine times on a single
+generated diagram and refused a 359-document bundle, which is how a
+confidentiality gate becomes a file somebody excludes.
+
+A SOPS-encrypted value fails too. The ciphertext is not the secret, but its
+algorithm marker says a secrets file reached a corpus that publishes, and the
+document around it usually names what the value is for. The marker is not
+written out here: this file is inside the tree the self-scan reads, and a
+detector its own documentation trips is a detector somebody excludes a file
+from. `src/scan.rs` carries it, escaped, where the rule is.
+
 This repository scans itself: `nix build .#checks.x86_64-linux.self-scan`.
 ## Promotion, and the gates that go with it
 
