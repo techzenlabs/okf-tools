@@ -26,6 +26,12 @@ OKF §11 is three rules: parseable frontmatter on every non-reserved `.md`, a
 non-empty `type` in it, and `index.md` and `log.md` following §8 and §9. That
 is the whole of what `okf-check` treats as an error.
 
+The §8 half of that third rule covers one shape that is easy to miss: a page
+may not claim the URL its sibling directory's listing publishes at.
+`docs/plans.md` beside `docs/plans/index.md` is the case, and [A page and a
+section that want one URL](#a-page-and-a-section-that-want-one-url) carries the
+measurements.
+
 Everything else it reports is a **warning**: vocabulary membership, the
 `human:`/`process:` actor form, ISO date shapes, a missing `title`. A bundle
 that trips all of them is still conformant, and a foreign consumer is
@@ -356,7 +362,68 @@ watched failing before it was believed. They build by name:
 Two more sit beside them. `pinned-commit` builds a source repository with two
 commits, pins the first, and asserts that the second's file is absent from the
 assembled tree. `layout-fork` asserts that a tenant overlay passes and a tracked
-copy of `baseof.html` does not.
+copy of `baseof.html` does not. `section-collision` sits beside them too, and
+the section below is what it measures.
+
+### A page and a section that want one URL
+
+`docs/plans.md` beside `docs/plans/index.md` cannot be published. The rename
+above is what makes `docs/plans/` a Hugo section at `/<id>/plans/`, and
+`docs/plans.md` is a page that wants the same URL. Hugo publishes one of them,
+exits 0, and says nothing.
+
+Measured on Hugo 0.165, one shape per site, reading the published tree back off
+disk rather than reasoning about it:
+
+| source tree | published at `/plans/` | lost |
+|---|---|---|
+| `plans.md` + `plans/_index.md` + `plans/child.md` | the section | `plans.md` |
+| `Plans.md` + `plans/_index.md` | the section | `Plans.md` |
+| `plans.md` + `plans/index.md` + `plans/child.md` | the leaf bundle | `plans.md` *and* `plans/child.md` |
+| `plans.md` + `plans/child.md`, no listing | the page, and the child still at `/plans/child/` | nothing |
+| `plans.md`, no `plans/` | the page | nothing |
+
+Three things follow, and none of them is what reading Hugo's source would have
+suggested.
+
+Which file survives is not a property of the shape. On a sixth site whose two
+names differ only after sanitisation, `Release Notes (Draft).md` beside
+`Release Notes Draft/`, the page won and the section was dropped. The two
+bundles that hit this while the tenant sites were being stood up each lost the
+other half.
+
+Hugo's silence holds at `--logLevel warn` and under `--printPathWarnings`. That
+sanitisation case is the one exception, and it warns, so a build log is not
+evidence either way.
+
+The comparison has to be on the published URL segment and not on the name, or
+`PLANS.md` beside `plans/` reads as clean. It is not: three repositories in
+this estate carry that pair, and a survey that compared names reported all
+three clean.
+
+Rows four and five are why a directory carrying no listing is not a section
+here. Nothing is lost in either, so a gate that fired on them would be
+inventing work for somebody.
+
+`okf-check` reports the collision as an error. `okf-assemble` refuses the tree
+before `okf-scan`, hugo and pagefind spend anything on it, and names both
+source files and the URL they contend for rather than a byte mismatch found at
+the end. The fix is one edit: fold the page into the listing, or rename it to
+something that is not its sibling directory's name. `overview.md` is what this
+estate calls that file.
+
+`okf-assemble` also refuses a directory holding both `index.md` and
+`_index.md`. `std::fs::rename` replaces its destination, so that tree used to
+lose the `_index.md` during assembly, silently, which is the same failure the
+rename exists to prevent.
+
+**Why an error rather than a warning.** §11 already makes `index.md` following
+§8 a conformance rule, and this is a rule about that reserved name: the
+`index.md` is what commits the directory to publishing as a section in the
+first place. So it lands inside the class §11 gates rather than opening a
+fourth one. The ratchet is the wrong instrument besides. `max_warnings` records
+what a bundle reported when it adopted, so a bundle adopting with the collision
+already present banks it in the budget and never fixes it.
 
 ### `okf-scan`
 

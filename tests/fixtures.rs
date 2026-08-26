@@ -99,6 +99,46 @@ fn conformance_fixture_reports_exactly_the_expected_diagnostics() {
     assert_eq!(report.checked, 22);
 }
 
+/// §8's URL collision, and the two shapes that look like it and are not.
+///
+/// The fixture holds five: a page beside its sibling directory's listing, a
+/// second pair whose names differ and whose URL segments do not, a page beside
+/// a directory that carries no listing, a page with no directory at all, and
+/// the pages underneath the two listings. Only the first two are findings, and
+/// which is which was measured against Hugo rather than reasoned about — see
+/// `okf_tools::collision` for the table.
+#[test]
+fn a_page_that_wants_its_sibling_listings_url_is_the_only_collision_reported() {
+    let (root, config) = load("collision");
+    let report = check::check_bundle(&root, &config).unwrap_or_default();
+
+    assert_eq!(
+        report.errors,
+        [
+            "Notes.md: this page and the listing notes/index.md both publish at `notes/`, and a site build keeps one of them without saying which. Fold it into the listing, or rename it (§8)",
+            "plans.md: this page and the listing plans/index.md both publish at `plans/`, and a site build keeps one of them without saying which. Fold it into the listing, or rename it (§8)",
+        ]
+    );
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    assert_eq!(report.checked, 11);
+}
+
+/// The negative control, asserted by name rather than by a count.
+///
+/// A gate that fired on `guides.md` or `standalone.md` would be worse than no
+/// gate: both shapes publish every page they hold, so every finding on them is
+/// a false one, and a checker with false findings gets its budget raised.
+#[test]
+fn a_directory_with_no_listing_and_a_page_with_no_directory_stay_silent() {
+    let (root, config) = load("collision");
+    let report = check::check_bundle(&root, &config).unwrap_or_default();
+    for finding in report.errors.iter().chain(report.warnings.iter()) {
+        for quiet in ["guides", "standalone", "child.md", "kept.md"] {
+            assert!(!finding.contains(quiet), "{finding}");
+        }
+    }
+}
+
 /// A clean document produces nothing, and an unterminated fence is tolerated.
 ///
 /// The second half is a quirk rather than a design choice, and it is asserted

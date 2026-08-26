@@ -20,6 +20,7 @@
 pub mod assemble;
 pub mod bootstrap;
 pub mod check;
+pub mod collision;
 pub mod config;
 pub mod frontmatter;
 pub mod glob;
