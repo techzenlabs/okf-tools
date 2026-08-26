@@ -104,6 +104,8 @@
           };
           leaf-bundle-rename =
             mkCheck "leaf-bundle-rename" ./nix/checks/leaf-bundle-rename.sh {};
+          section-collision =
+            mkCheck "section-collision" ./nix/checks/section-collision.sh {};
           pinned-commit = mkCheck "pinned-commit" ./nix/checks/pinned-commit.sh {};
           scan-negative-control =
             mkCheck "scan-negative-control" ./nix/checks/scan-negative-control.sh {};

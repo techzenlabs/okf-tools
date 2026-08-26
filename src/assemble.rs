@@ -21,6 +21,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::collision::Collision;
 use crate::manifest::{Bundle, Manifest};
 
 #[derive(Debug, thiserror::Error)]
@@ -61,6 +62,38 @@ pub enum AssembleError {
     NoMermaid,
     #[error("--local names bundle `{id}`, which is not in the manifest")]
     UnknownLocal { id: String },
+    #[error("{}", collision_report(.0))]
+    Collisions(Vec<(String, Collision)>),
+    #[error(
+        "bundle `{id}`: {dir} carries both index.md and _index.md, and the \
+         rename that makes the listing a section would overwrite one with the \
+         other. Delete the _index.md: okf-assemble writes it"
+    )]
+    ListingWouldBeOverwritten { id: String, dir: String },
+}
+
+/// Every collision this run found, one per line, naming both source files and
+/// the URL they contend for.
+///
+/// All of them rather than the first, because a bundle that grew the shape
+/// once usually grew it from a scaffold and has it more than once, and a fix
+/// per run is a fix per hour.
+fn collision_report(found: &[(String, Collision)]) -> String {
+    let lines: Vec<String> = found
+        .iter()
+        .map(|(id, collision)| {
+            let Collision { page, listing, url } = collision;
+            format!("  {id}/{page} and {id}/{listing} both publish at /{id}/{url}/")
+        })
+        .collect();
+    format!(
+        "a page and a directory listing cannot both publish at one URL, and \
+         Hugo keeps one of them without saying which:\n{}\n\nFold the page into \
+         the listing, or rename it to something that is not its sibling \
+         directory's name. Fix it in the bundle repository: okf-check \
+         reports it there, and every tenant mounting the bundle hits it here.",
+        lines.join("\n")
+    )
 }
 
 fn io<E: Into<std::io::Error>>(context: impl Into<String>) -> impl FnOnce(E) -> AssembleError {
@@ -137,13 +170,24 @@ pub fn assemble(manifest: &Manifest, options: &Options) -> Result<Outcome, Assem
 
     let extensions = manifest.asset_extensions();
     let mut outcome = Outcome::default();
+    let mut collisions: Vec<(String, Collision)> = Vec::new();
     for bundle in &manifest.bundles {
         let source = source_tree(bundle, options, &mut outcome)?;
         let dest = content.join(&bundle.id);
         outcome.files = outcome
             .files
             .saturating_add(copy_bundle(&source, &dest, &extensions)?);
-        outcome.renamed = outcome.renamed.saturating_add(rename_indexes(&dest)?);
+        // Before the rename, so the paths reported are the ones an author will
+        // find in the bundle repository rather than the `_index.md` this step
+        // is about to write.
+        collisions.extend(
+            crate::collision::find(&dest, &[])
+                .into_iter()
+                .map(|found| (bundle.id.clone(), found)),
+        );
+        outcome.renamed = outcome
+            .renamed
+            .saturating_add(rename_indexes(&dest, &bundle.id)?);
         outcome.rewritten = outcome
             .rewritten
             .saturating_add(crate::sitelinks::rewrite_tree(
@@ -152,6 +196,11 @@ pub fn assemble(manifest: &Manifest, options: &Options) -> Result<Outcome, Assem
                 &bundle.site_absolute_base,
             )?);
         outcome.bundles = outcome.bundles.saturating_add(1);
+    }
+    // After every bundle, so one run names every collision the tenant has
+    // rather than the first one it walked into.
+    if !collisions.is_empty() {
+        return Err(AssembleError::Collisions(collisions));
     }
 
     write_root_index(manifest, &content)?;
@@ -305,10 +354,16 @@ fn wanted(name: &str, extensions: &[String]) -> bool {
 /// rename intact — it is the same bytes under a name Hugo reads as a section —
 /// and the raw-markdown route serves it unchanged.
 ///
+/// A directory already carrying an `_index.md` is refused rather than
+/// renamed over. `std::fs::rename` replaces its destination, so a bundle
+/// holding both names in one directory used to lose the `_index.md` here,
+/// silently, which is the same failure the rename exists to prevent.
+///
 /// # Errors
 ///
-/// Fails when a directory cannot be read or a rename cannot be performed.
-pub fn rename_indexes(root: &Path) -> Result<usize, AssembleError> {
+/// Fails when a directory cannot be read, when a rename would overwrite a
+/// listing that is already there, or when a rename cannot be performed.
+pub fn rename_indexes(root: &Path, id: &str) -> Result<usize, AssembleError> {
     let mut renamed = 0usize;
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -320,7 +375,14 @@ pub fn rename_indexes(root: &Path) -> Result<usize, AssembleError> {
                 continue;
             }
             if path.file_name().is_some_and(|n| n == "index.md") {
-                std::fs::rename(&path, dir.join("_index.md"))
+                let into = dir.join("_index.md");
+                if into.exists() {
+                    return Err(AssembleError::ListingWouldBeOverwritten {
+                        id: id.to_owned(),
+                        dir: crate::walk::to_posix(dir.strip_prefix(root).unwrap_or(&dir)),
+                    });
+                }
+                std::fs::rename(&path, &into)
                     .map_err(io(format!("renaming {}", path.display())))?;
                 renamed = renamed.saturating_add(1);
             }

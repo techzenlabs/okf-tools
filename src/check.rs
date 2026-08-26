@@ -13,12 +13,13 @@
 //! module replaces byte-for-byte, which is what lets the two be diffed against
 //! a real corpus to prove the port changed nothing.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::LazyLock;
 
 use regex::Regex;
 
+use crate::collision::Collision;
 use crate::config::{Confidentiality, Config};
 use crate::frontmatter::{self, Frontmatter, ParseError, parse_strict, unquote};
 use crate::links::{self, Target};
@@ -111,6 +112,13 @@ pub fn check_bundle(root: &Path, config: &Config) -> Result<Report, crate::confi
         );
     }
 
+    // Built once, ahead of the walk, so the diagnostic lands on the page it
+    // is about and in the same path order as every other finding.
+    let collisions: BTreeMap<String, Collision> =
+        crate::collision::find(root, &config.paths.skip_names)
+            .into_iter()
+            .map(|c| (c.page.clone(), c))
+            .collect();
     for path in walk::markdown_files(root, &config.paths.skip_names) {
         let Ok(rel) = path.strip_prefix(root) else {
             continue;
@@ -118,6 +126,10 @@ pub fn check_bundle(root: &Path, config: &Config) -> Result<Report, crate::confi
         let name = crate::walk::to_posix(rel);
         let text = walk::read_lossy(&path);
         report.checked = report.checked.saturating_add(1);
+
+        if let Some(collision) = collisions.get(&name) {
+            check_section_collision(&mut report, &name, collision);
+        }
 
         match path.file_name().and_then(|n| n.to_str()) {
             Some("index.md") => {
@@ -461,6 +473,40 @@ fn check_stale_after(report: &mut Report, path: &str, raw: &str, as_of: Option<&
             &format!("stale_after `{stale_after}` has passed (as of {as_of})"),
         );
     }
+}
+
+/// §8 — a page may not claim the URL a sibling directory's listing publishes
+/// at.
+///
+/// An **error**, and the argument for that is §11.3 rather than a fourth gated
+/// class. §11 already makes `index.md` following §8 a conformance rule, and
+/// this is a rule about that reserved name: it is the `index.md` that commits
+/// the directory to publishing as a section, so a page claiming the same URL
+/// is a §8 matter and not a new one. A bundle carrying both passes every other
+/// rule the standard has and still cannot be mounted without losing a page,
+/// which is the standard promising something it does not deliver.
+///
+/// A warning would be the wrong instrument even setting the class aside.
+/// `max_warnings` records what a bundle reported when it adopted, so a bundle
+/// adopting with the collision already present banks it in the budget and
+/// never fixes it. The ratchet is built to hold a count steady; this is a
+/// defect that has to reach zero.
+///
+/// The fix is one edit. Fold the page into the listing, or rename it to
+/// something that is not its sibling directory's name — `overview.md` is what
+/// this estate calls that file. See [`crate::collision`] for what was
+/// measured.
+fn check_section_collision(report: &mut Report, name: &str, collision: &Collision) {
+    let listing = &collision.listing;
+    let url = &collision.url;
+    report.err(
+        name,
+        &format!(
+            "this page and the listing {listing} both publish at `{url}/`, and a \
+             site build keeps one of them without saying which. Fold it into the \
+             listing, or rename it (§8)"
+        ),
+    );
 }
 
 /// §8 — a listing. Frontmatter is permitted only at the bundle root.

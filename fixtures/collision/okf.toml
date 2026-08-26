@@ -1,0 +1,12 @@
+# A synthetic bundle carrying every shape of the page/section URL collision,
+# and the two shapes that look like it and are not. Nothing here is derived
+# from a real corpus.
+config_version = 1
+okf_version = "0.2"
+bundle_root = "."
+title = "Collision fixture"
+description = "A page beside its sibling directory's listing, and the shapes that are not that."
+max_warnings = 0
+
+[vocabulary]
+extends = ["core"]
