@@ -8,7 +8,7 @@
 //! `config_version` so the tool can refuse a file it does not understand
 //! rather than misread it.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::Deserialize;
@@ -54,6 +54,8 @@ pub enum ConfigError {
         #[source]
         source: regex::Error,
     },
+    #[error("[[retype]] from = \"{from}\": {why}")]
+    RetypeRule { from: String, why: String },
 }
 
 /// A path shape and the `type` every document matching it carries.
@@ -80,6 +82,40 @@ pub struct Mirror {
     /// A pattern removed from each entry title before it is listed.
     pub title_strip: String,
 }
+
+/// One row of the `okf-migrate --retype` rename table.
+///
+/// A row either renames — `to` names the vocabulary name the old value
+/// becomes — or refers every file carrying the old name to a person, and then
+/// `review` says why. Exactly one of the two, because a row that says neither
+/// is a name somebody forgot to finish and a row that says both is two rules.
+///
+/// There is no third form that deletes `type`. §11 requires the field, so a
+/// name being retired from a vocabulary is a `review` row: the files are
+/// listed, and a person retypes or deletes each one. See
+/// [`crate::retype`].
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RetypeRule {
+    /// The `type` value the documents carry today.
+    pub from: String,
+    /// The vocabulary name it becomes.
+    pub to: Option<String>,
+    /// Why a person decides this one, printed beside every file that has it.
+    pub review: Option<String>,
+}
+
+/// What the rename table says about one old `type` value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Retype {
+    /// Rewrite the value to this name.
+    To(String),
+    /// Leave every file carrying it exactly as written, and list them.
+    Review(String),
+}
+
+/// The rename table, keyed by the old `type` value.
+pub type RetypeTable = BTreeMap<String, Retype>;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -355,6 +391,10 @@ pub struct Config {
     pub promote: PromoteConfig,
     #[serde(rename = "mirror")]
     pub mirrors: Vec<Mirror>,
+    /// The `okf-migrate --retype` rename table. Empty in every bundle that was
+    /// typed rather than retyped, which is all but one of them.
+    #[serde(rename = "retype")]
+    pub retype: Vec<RetypeRule>,
     #[serde(rename = "type_rules")]
     pub type_rules: Vec<TypeRule>,
 }
@@ -374,6 +414,7 @@ impl Default for Config {
             confidentiality: Confidentiality::default(),
             promote: PromoteConfig::default(),
             mirrors: Vec::new(),
+            retype: Vec::new(),
             type_rules: Vec::new(),
         }
     }
@@ -467,6 +508,65 @@ impl Config {
             .generated
             .iter()
             .any(|pattern| crate::glob::matches(pattern, relative))
+    }
+
+    /// The validated `--retype` rename table.
+    ///
+    /// Four things are refused rather than carried, because a rename table
+    /// that lies rewrites a corpus wrongly and nobody reads 672 diffs:
+    ///
+    /// * a row that names neither `to` nor `review`, which is a name somebody
+    ///   started and did not finish;
+    /// * a row that names both, which is two rules in one place;
+    /// * two rows for one `from`, where which one wins is invisible;
+    /// * a `to` this bundle's vocabulary does not hold. The vocabulary is
+    ///   closed by intent, and a table is exactly where a name gets invented.
+    ///
+    /// A row renaming a name to itself is refused too: the thirteen names that
+    /// survive a rename table unchanged belong absent from it, not restated in
+    /// it, and a `from == to` row reads as a rename that does nothing.
+    ///
+    /// # Errors
+    ///
+    /// Fails on any of those, and on an `extends` naming a preset this build
+    /// does not ship.
+    pub fn retype_table(&self) -> Result<RetypeTable, ConfigError> {
+        let vocabulary = self.types()?;
+        let mut table = RetypeTable::new();
+        for rule in &self.retype {
+            let refuse = |why: &str| ConfigError::RetypeRule {
+                from: rule.from.clone(),
+                why: why.to_owned(),
+            };
+            let action = match (rule.to.as_deref(), rule.review.as_deref()) {
+                (Some(_), Some(_)) => {
+                    return Err(refuse(
+                        "names both `to` and `review`; a row does one or the other",
+                    ));
+                }
+                (None, None) => {
+                    return Err(refuse(
+                        "names neither `to` nor `review`; say what it becomes, or why a person decides",
+                    ));
+                }
+                (Some(to), None) if to == rule.from => {
+                    return Err(refuse(
+                        "renames the name to itself; leave it out of the table instead",
+                    ));
+                }
+                (Some(to), None) if !vocabulary.is_empty() && !vocabulary.contains(to) => {
+                    return Err(refuse(&format!(
+                        "renames to `{to}`, which this bundle's vocabulary does not hold"
+                    )));
+                }
+                (Some(to), None) => Retype::To(to.to_owned()),
+                (None, Some(review)) => Retype::Review(review.to_owned()),
+            };
+            if table.insert(rule.from.clone(), action).is_some() {
+                return Err(refuse("appears twice; one old name has one rule"));
+            }
+        }
+        Ok(table)
     }
 
     /// Compiled mirror rules, paired as (directory prefix, title pattern).

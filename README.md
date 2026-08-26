@@ -11,6 +11,8 @@ Commands:
 - `okf-index` regenerates the §8 directory listings from concept frontmatter,
   and with `--check` reports staleness without writing.
 - `okf-migrate` writes the frontmatter it can derive and reports the rest.
+  `--retype` applies a rename table to a bundle whose documents are already
+  typed, and changes nothing but `type`.
 - `okf-assemble` turns a tenant manifest into a Hugo content tree.
 - `okf-scan` refuses to publish a tree carrying a key, a token or an
   identifier.
@@ -96,6 +98,10 @@ month_entry_glob = "summary*.md"
 [[mirror]]                          # a vendored upstream whose titles carry a tail
 paths = ["sources/vendor/docs"]
 title_strip = '\s*\|\s*Some Site\s*$'
+
+[[retype]]                          # okf-migrate --retype, for a typed corpus
+from = "Meeting Summary"
+to = "Meeting"
 ```
 
 `[confidentiality]` and `[promote]` are documented under [Promotion, and the
@@ -141,6 +147,53 @@ no `Person`. `engineering` (13) is a code repository's `docs/` tree.
 A preset is a floor, not a ceiling: a name one repository genuinely needs goes
 in that bundle's `types`. A name that shows up in a second repository is a
 candidate for a preset, which is a change here and therefore a reviewed one.
+
+### Retyping a corpus that is already typed
+
+`okf-migrate` writes the frontmatter a bundle has not got, and treats a
+document that already carries a `type` as finished. That is right everywhere
+except one place: a bundle whose 672 documents are typed against 39 names the
+vocabulary reduces to 26. `okf-migrate --retype` is that pass.
+
+The rename table is data in `okf.toml`, because the names being retired belong
+to the bundle rather than to the tool:
+
+```toml
+[[retype]]
+from = "Meeting Summary"
+to = "Meeting"
+
+[[retype]]
+from = "Knowledge Base Page"
+review = "Architecture Note, Runbook, Governance Document or Reference, by directory"
+```
+
+A row either renames or refers its files to a person, never both and never
+neither. The report lists every file a `review` row claims, with the reason,
+because those are the only judgements in the pass. It also lists the type names
+present in the bundle that no row mentions, so a name somebody forgot to write
+a row for looks different from a name that survives on purpose.
+
+Four shapes are refused rather than run, since a table that lies rewrites a
+corpus wrongly and nobody reads 672 diffs: a row with neither `to` nor
+`review`, a row with both, two rows for one `from`, and a `to` the bundle's
+vocabulary does not hold.
+
+**`type` is never removed.** §11 requires the field, so a name being retired
+rather than renamed is a `review` row: its files are listed and a person
+retypes or deletes each one. A pass that dropped the one required field would
+turn a rename into a conformance failure it caused itself.
+
+**It parses frontmatter and never greps.** Two documents in this estate carry a
+`^type:` line that is an exemplar inside a fenced code block in a prompt
+template, and it is not the document's own type. Over the 757-file reference
+bundle `grep -rh '^type:'` finds 68 `Meeting Summary` lines against 67
+documents, and the count is how you tell.
+
+Run twice it writes nothing the second time, and it moves nothing but the
+`type` value: quoting, key order, spacing and line endings stay the file's own.
+Measured over that reference bundle, the whole pass is 493 changed lines across
+493 files, and every one of them is a `type:` line.
 
 ## The site half
 
