@@ -248,6 +248,38 @@ pub struct Destination {
     /// The published base URL, joined with the page's bundle-relative path to
     /// give the `promoted_to` value written back into the source.
     pub url: String,
+    /// Email domains whose owner records may publish here.
+    ///
+    /// `owner` answers "who owns this system", and a client reading their own
+    /// documentation should get their own custodians. The pilot promotion
+    /// carried four owners, two of them the vendor's, one with a work address
+    /// lifted from a signature inside a private escalation thread — and a
+    /// machine consumer read four owners of the client's RIS with nothing
+    /// distinguishing the vendor side. The distinction survived only inside
+    /// free-text `title`, which is not a distinction.
+    ///
+    /// Empty means the rule is off, which is the §11 posture the other three
+    /// confidentiality rules already take. Naming domains turns it on: an
+    /// owner whose email is on another domain is refused.
+    #[serde(default)]
+    pub owner_domains: Vec<String>,
+    /// Organisations, as the source's profiles write them, whose people may
+    /// own a page here.
+    ///
+    /// The other half of the same rule, and the half that matters more than it
+    /// looks. `DECISION-phase-2-promotion.md` says an owner email a profile
+    /// does not carry is left blank and reported as a gap, so a domain check
+    /// alone has nothing to read for exactly the owners it most needs to
+    /// place. Matched against the `**Org / role:**` line of the profile whose
+    /// title is the owner's name, case-insensitively, as a substring — the
+    /// line reads "Example Works, Director of Operations" and the org is its
+    /// first clause.
+    ///
+    /// An owner with neither an email nor a profile is reported as a note
+    /// rather than refused. Nothing here can place them, and saying so is a
+    /// truer answer than guessing either way.
+    #[serde(default)]
+    pub owner_orgs: Vec<String>,
 }
 
 /// Where a source page goes, decided before anything is drafted.
@@ -290,6 +322,12 @@ pub struct PromoteConfig {
     /// Source prefixes holding raw evidence. A claim resting on one is
     /// restated as a dated labelled statement and the citation is dropped.
     pub evidence_prefixes: Vec<String>,
+    /// Identifier prefixes a reader can expand without the private registers,
+    /// added to the standards list `okf-tools` ships. Matched case-insensitively.
+    ///
+    /// `DEC-066` and `AES-256` are the same shape. One cites a register only
+    /// the author can open; the other cites a cipher.
+    pub public_identifier_prefixes: Vec<String>,
     #[serde(rename = "destination")]
     pub destinations: Vec<Destination>,
     #[serde(rename = "route")]
@@ -306,6 +344,7 @@ impl Default for PromoteConfig {
                 .iter()
                 .map(|s| (*s).to_owned())
                 .collect(),
+            public_identifier_prefixes: Vec::new(),
             destinations: Vec::new(),
             routes: Vec::new(),
             sources: Vec::new(),

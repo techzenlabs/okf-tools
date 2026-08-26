@@ -512,6 +512,88 @@ somebody is forbidden by the same rule that forbids the profile, and no pattern
 recognises it. The gate catches pointers, the reviewer catches
 characterisation, and the gate is the half that cannot be forgotten.
 
+### The four gates that read the restatement
+
+That paragraph was true of characterisation and over-claimed for four classes
+beside it. Each of these is a comparison rather than a judgement, and
+`--propose` has both texts in hand. Three reviewers found all four on the one
+page promotion has actually drafted.
+
+**A confidence label the source does not carry.** The pilot labelled
+twenty-two claims where the source labelled six, and all sixteen additions
+said `Confirmed`. The uniform direction is the tell: a habit rather than
+sixteen decisions. One of the sixteen was attached to a claim the source never
+makes — the evidence had been dropped and a stronger claim took its place,
+which is the restatement rule failing in the way that matters most.
+
+The check is a count, not a diff. A restatement rewords the sentence, so the
+labels cannot be matched to each other; what can be compared is how many there
+are. Dropping a label is fine. Rewording everything is fine. Ending with more
+confidence than you started with is not.
+
+**A person-shaped bullet.** Even when the person is at the vendor, and even
+when every fact in the bullet is a fact about the system. The pilot's version
+paraphrased a named engineer's profile and published his remote access to a
+live clinical server. Every name with a profile in the source is known here,
+and a bullet is a shape. Restate the system fact without the custodian; if the
+person really is the answer to "who owns this", they belong in `owner`.
+
+**A bare register identifier.** `DEC-066`, `OQ-095`. They resolve only inside
+the private registers, so they cite evidence the reader cannot reach, and the
+numbers disclose how large those registers are. In the pilot, `OQ-095`
+resolved to the exact passage the drafter had deliberately cut. An identifier
+the destination bundle itself spells out is a reference and passes; a public
+standard is exempt by prefix, extended with `[promote]
+public_identifier_prefixes`.
+
+**A reconstructed meeting.** "Raised with the vendor at COO level on July 30,
+2026 and worked through on a joint call on July 31" names a private
+communication, its date and its subject — the disclosure the citation rule
+exists to suppress, reassembled in prose. A sentence that carries both an
+occasion and a date is refused. A dated claim is required; a dated meeting is
+not. And "at COO level" does not de-identify an organisation with one COO.
+
+All four read the body and never the front matter, because `owner` is
+list-shaped and full of people. All four skip fenced code, because a quoted log
+line is a machine's output rather than a restatement.
+
+### `verified` is dropped, never inherited
+
+The pilot copied `verified: { by: human:mslade, at: 2026-08-21 }` onto a page
+that did not exist on 21 August and whose claims were relabelled afterwards.
+It asserted that a human had verified text nobody had verified, including the
+sixteen manufactured labels. On a bundle whose whole premise is that a client
+can trust what it reads, an inherited attestation is worse than none. A
+promoted page is unverified until somebody verifies *it*.
+
+### `owner` is the client's side of the table
+
+`owner` answers "who owns this system", and a machine consumer reads it as
+exactly that. The pilot's record carried four people, two of them the vendor's,
+one with a work address lifted from a signature inside a private escalation
+thread — and the split survived only inside free-text `title`, which is not a
+split at all.
+
+A destination may name the domains and the organisations it publishes for:
+
+```toml
+[[promote.destination]]
+name = "knowledge"
+path = "../knowledge"
+url = "https://docs.example.test/knowledge"
+owner_domains = ["example.test"]
+owner_orgs = ["Example Works"]
+```
+
+An owner whose email is on another domain is refused. An owner with no email —
+which is permitted, and which the promotion decision asks to be reported as a
+gap rather than guessed at — is placed by the `**Org / role:**` line of the
+profile whose title is their name. An owner with neither is a **note**: nothing
+here can tell a client custodian from a vendor's account manager, and saying so
+is a truer answer than either guess. Both keys are optional and the rule is off
+until one is set.
+
+
 `okf-promote --refresh` answers the question a person cannot answer by looking:
 has the source grown a pointer since this page was promoted? It redraws the
 draft from the source as it stands, reviews it, and reports the difference
@@ -624,6 +706,12 @@ whose pages exist to fail. `cargo test` asserts the exact diagnostic each one
 produces, so a rule that stops firing breaks a test rather than quietly
 passing a page. Run `okf-check` inside `fixtures/confidentiality` to watch
 seven errors, one per way out of the bundle.
+
+The six rules above were each run against the code before them, which is the
+only reason to believe them: with the restatement gates removed, the four
+restatement tests fail; with `owner_domains` and `owner_orgs` ignored, both
+owner tests fail; with `verified` left in the kept keys, the attestation
+travels and its test fails.
 
 ## Prior art
 

@@ -30,14 +30,16 @@
 //! profile, and no checker sees it. The gate catches pointers and the reviewer
 //! catches characterisation; this is the half that cannot be forgotten.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::config::{Config, PrivateClass};
+use crate::config::{Config, Destination, PrivateClass};
 use crate::frontmatter::{self, ParseError, parse_strict};
 use crate::links::{self, Target};
+use crate::restate;
 
 #[expect(
     clippy::expect_used,
@@ -214,6 +216,18 @@ pub enum Kind {
     MissingOwner,
     /// An `owner` record the destination's schema does not have room for.
     OwnerRecord,
+    /// An `owner` whose email or organisation is not one this bundle serves.
+    ForeignOwner,
+    /// An `owner` with neither an email nor a profile to place them by.
+    UnplaceableOwner,
+    /// A confidence label the source does not carry.
+    ManufacturedLabel,
+    /// A bullet about a person the source keeps a profile on.
+    PersonBullet,
+    /// A register identifier that resolves only where the reader cannot go.
+    BareIdentifier,
+    /// A sentence that dates an occasion rather than a fact.
+    MeetingProse,
 }
 
 impl Kind {
@@ -227,12 +241,23 @@ impl Kind {
             Self::ForeignType => "foreign-type",
             Self::MissingOwner => "missing-owner",
             Self::OwnerRecord => "owner-record",
+            Self::ForeignOwner => "foreign-owner",
+            Self::UnplaceableOwner => "unplaceable-owner",
+            Self::ManufacturedLabel => "manufactured-label",
+            Self::PersonBullet => "person-bullet",
+            Self::BareIdentifier => "bare-identifier",
+            Self::MeetingProse => "meeting-prose",
         }
     }
 
     fn severity(self) -> Severity {
         match self {
-            Self::MissingOwner => Severity::Note,
+            // The two kinds that do not stop the write. No `owner` at all is a
+            // gap to record; an owner nothing can place is a question for a
+            // person, and the promotion decision already says a blank email is
+            // permitted and reported. Every other kind is something on the
+            // page that must not publish.
+            Self::MissingOwner | Self::UnplaceableOwner => Severity::Note,
             _ => Severity::Unresolved,
         }
     }
@@ -359,9 +384,14 @@ pub fn propose(
         format!("{into}/{name}")
     };
 
+    let on_disk = read(&source.root.join(source_relative))?;
+    // The page as the source holds it. When nobody hand-wrote a draft it *is*
+    // the draft, which is why the label comparison then finds nothing: a page
+    // that was copied rather than restated added no confidence to anything.
+    let committed = on_disk.clone();
     let source_text = match draft_body {
         Some(text) => text.to_owned(),
-        None => read(&source.root.join(source_relative))?,
+        None => on_disk,
     };
     if let Err(err) = parse_strict(&source_text) {
         return Err(match err {
@@ -387,6 +417,8 @@ pub fn propose(
         destination,
         source,
         source_relative,
+        &committed,
+        Some(target),
     )?;
 
     Ok(Proposal {
@@ -476,6 +508,12 @@ fn review(
     destination: &Bundle,
     source: &Bundle,
     source_relative: &str,
+    // `committed_source` is the source page as it stands, which the draft
+    // restates. It equals the draft body when nobody hand-wrote one, and the
+    // label comparison then finds nothing — a page that was copied rather than
+    // restated added no confidence to anything.
+    committed_source: &str,
+    target: Option<&Destination>,
 ) -> Result<Vec<Item>, PromoteError> {
     let destination_dir = destination_path.rsplit_once('/').map_or("", |(d, _)| d);
     let source_dir = source_relative.rsplit_once('/').map_or("", |(d, _)| d);
@@ -550,6 +588,17 @@ fn review(
                 .to_owned(),
         });
     }
+    if let Some(target) = target.filter(|t| !t.owner_domains.is_empty() || !t.owner_orgs.is_empty())
+    {
+        items.extend(foreign_owners(draft, target, source));
+    }
+    items.extend(restatement_items(
+        draft,
+        committed_source,
+        destination,
+        source,
+    ));
+
     if frontmatter::nested_records(draft, "owner").is_empty() {
         items.push(Item {
             kind: Kind::MissingOwner,
@@ -564,6 +613,226 @@ fn review(
         });
     }
     Ok(items)
+}
+
+/// Owner records the destination's own domains do not account for.
+///
+/// `owner` is the answer to "who owns this system", and on a client-facing
+/// page the client should get their own custodians. The pilot promotion
+/// carried four owners, two of them the vendor's, one with a work address
+/// lifted from a signature inside a private escalation thread — and the
+/// RIA-versus-vendor split survived only inside free-text `title`, which a
+/// machine consumer cannot read as a split at all.
+///
+/// Off unless the destination names its domains, the same posture the other
+/// three confidentiality rules take.
+fn foreign_owners(draft: &str, target: &Destination, source: &Bundle) -> Vec<Item> {
+    let mut items = Vec::new();
+    let allowed = target.owner_domains.join(", ");
+    for record in frontmatter::nested_records(draft, "owner") {
+        let name = record.get("name").unwrap_or_default().trim().to_owned();
+        let email = record.get("email").unwrap_or_default().trim().to_owned();
+
+        if !email.is_empty() && !target.owner_domains.is_empty() {
+            let domain = email.rsplit('@').next().unwrap_or_default().to_lowercase();
+            if target
+                .owner_domains
+                .iter()
+                .any(|permitted| permitted.to_lowercase() == domain)
+            {
+                continue;
+            }
+            items.push(Item {
+                kind: Kind::ForeignOwner,
+                line: record.line,
+                subject: name.clone(),
+                sentence: format!("owner: - name: {name}, email: {email}"),
+                replacement: format!(
+                    "an owner on one of this bundle's own domains ({allowed}). `{name}` is not,                      and a machine reading `owner` is told this person owns the client's system                      with nothing marking which side they are on. A vendor contact is not an                      owner: name the vendor as an organisation and let the client-side owner be                      the route to it. Check where the address came from before it publishes —                      an email lifted from a signature in a private thread is a disclosure                      whatever field it lands in."
+                ),
+            });
+            continue;
+        }
+
+        // No email, which the promotion decision permits. The profile's org is
+        // what places them instead.
+        match profile_org(source, &name) {
+            Some(org) if !target.owner_orgs.is_empty() => {
+                let lowered = org.to_lowercase();
+                if target
+                    .owner_orgs
+                    .iter()
+                    .any(|permitted| lowered.contains(&permitted.to_lowercase()))
+                {
+                    continue;
+                }
+                items.push(Item {
+                    kind: Kind::ForeignOwner,
+                    line: record.line,
+                    subject: name.clone(),
+                    sentence: format!("owner: - name: {name} ({org})"),
+                    replacement: format!(
+                        "an owner from one of the organisations this bundle publishes for ({}).                          `{name}`'s profile puts them at `{org}`, which is not one of them.",
+                        target.owner_orgs.join(", ")
+                    ),
+                });
+            }
+            Some(_) => {}
+            None => items.push(Item {
+                kind: Kind::UnplaceableOwner,
+                line: record.line,
+                subject: name.clone(),
+                sentence: format!("owner: - name: {name}"),
+                replacement: format!(
+                    "an email on one of this bundle's own domains ({allowed}), or a profile in                      the source that says which organisation `{name}` belongs to. With neither,                      nothing here can tell a client custodian from a vendor's account manager,                      and this is a note rather than a refusal because guessing either way would                      be worse. Decide it by hand."
+                ),
+            }),
+        }
+    }
+    items
+}
+
+/// The `**Org / role:**` line of the profile whose title is `name`.
+///
+/// The profiles are the source's interpretive layer and never publish, so
+/// reading one here is reading it to *refuse* something, which is the one use
+/// the rule permits. Nothing from the profile reaches the draft.
+fn profile_org(source: &Bundle, name: &str) -> Option<String> {
+    if name.is_empty() {
+        return None;
+    }
+    for prefix in &source.config.promote.profile_prefixes {
+        let dir = source.root.join(prefix.trim_matches('/'));
+        if !dir.is_dir() {
+            continue;
+        }
+        for path in crate::walk::markdown_files(&dir, &[]) {
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let title = parse_strict(&text)
+                .map(|fm| fm.get_unquoted("title"))
+                .unwrap_or_default();
+            if title.trim() != name {
+                continue;
+            }
+            for line in text.lines() {
+                if let Some(rest) = line.trim().strip_prefix("**Org / role:**") {
+                    let org = rest.trim();
+                    if !org.is_empty() {
+                        return Some(org.to_owned());
+                    }
+                }
+            }
+            return None;
+        }
+    }
+    None
+}
+
+/// The four gates that read the restatement rather than its pointers.
+///
+/// See [`crate::restate`] for why each one is a comparison and not a
+/// judgement. They land here rather than there because [`Item`] is this
+/// module's report shape and `restate` has no business knowing it.
+fn restatement_items(
+    draft: &str,
+    committed_source: &str,
+    destination: &Bundle,
+    source: &Bundle,
+) -> Vec<Item> {
+    let named = |kind: Kind| {
+        move |finding: restate::Finding| Item {
+            kind,
+            line: finding.line,
+            subject: finding.subject,
+            sentence: finding.sentence,
+            replacement: finding.detail,
+        }
+    };
+    let mut items: Vec<Item> = restate::manufactured_labels(draft, committed_source)
+        .into_iter()
+        .map(named(Kind::ManufacturedLabel))
+        .collect();
+    items.extend(
+        restate::person_bullets(draft, &profiled_names(source))
+            .into_iter()
+            .map(named(Kind::PersonBullet)),
+    );
+    items.extend(
+        restate::unresolvable_identifiers(
+            draft,
+            &destination_text(destination),
+            &source.config.promote.public_identifier_prefixes,
+        )
+        .into_iter()
+        .map(named(Kind::BareIdentifier)),
+    );
+    items.extend(
+        restate::reconstructed_meetings(draft)
+            .into_iter()
+            .map(named(Kind::MeetingProse)),
+    );
+    items
+}
+
+/// Every name the source keeps a profile on.
+///
+/// The profile's own `title` when it has one, and the humanised file stem
+/// otherwise, because a profile is a page and §8 does not make its title
+/// mandatory. Read from the source tree rather than from the draft: the whole
+/// point is that the draft no longer links to them.
+fn profiled_names(source: &Bundle) -> Vec<String> {
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    for prefix in &source.config.promote.profile_prefixes {
+        let dir = source.root.join(prefix.trim_matches('/'));
+        if !dir.is_dir() {
+            continue;
+        }
+        for path in crate::walk::markdown_files(&dir, &[]) {
+            let title = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|text| parse_strict(&text).ok().map(|fm| fm.get_unquoted("title")))
+                .unwrap_or_default();
+            if !title.trim().is_empty() {
+                names.insert(title.trim().to_owned());
+                continue;
+            }
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                let humanised = stem
+                    .split(['-', '_'])
+                    .filter(|part| !part.is_empty())
+                    .map(|part| {
+                        let mut chars = part.chars();
+                        chars.next().map_or_else(String::new, |first| {
+                            first.to_uppercase().collect::<String>() + chars.as_str()
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if !humanised.is_empty() {
+                    names.insert(humanised);
+                }
+            }
+        }
+    }
+    names.into_iter().collect()
+}
+
+/// Everything the destination bundle already publishes, concatenated.
+///
+/// Only used to decide whether a register identifier resolves. A glossary
+/// entry or an earlier promoted page that spells the register out makes the
+/// identifier reachable, which is the right way out of that finding.
+fn destination_text(destination: &Bundle) -> String {
+    let mut all = String::new();
+    for path in crate::walk::markdown_files(&destination.root, &[]) {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            all.push_str(&text);
+            all.push('\n');
+        }
+    }
+    all
 }
 
 /// One target, and the two directories it resolves against.
@@ -672,7 +941,17 @@ fn rewrite_frontmatter(
     } else {
         "\n"
     };
-    let kept = drop_keys(block.as_str(), &["promoted_to", "promoted_from"]);
+    // `verified` goes with them, and it is the one that matters. The pilot
+    // promotion inherited `verified: { by: human:mslade, at: 2026-08-21 }`
+    // onto a page that did not exist on 21 August and whose claims were
+    // relabelled afterwards, so the attestation said a human had checked text
+    // nobody had checked. On a bundle whose premise is that a client can trust
+    // what it reads, an inherited attestation is worse than none. A promoted
+    // page is unverified until somebody verifies *it*.
+    let kept = drop_keys(
+        block.as_str(),
+        &["promoted_to", "promoted_from", "verified"],
+    );
     let provenance_block = [
         "promoted_from:".to_owned(),
         format!("  repo: {}", quote(&provenance.repo)),
@@ -957,14 +1236,39 @@ fn review_text(
     provenance: &Provenance,
 ) -> Result<(String, Vec<Item>), PromoteError> {
     let draft = rewrite_frontmatter(text, provenance, &provenance.path)?;
+    // `text` is both the draft and the committed source here: `--refresh`
+    // redraws mechanically from the source and asks what the source has grown,
+    // so there is no restatement to compare against and no labels can have
+    // been manufactured.
     let items = review(
         &draft,
         destination_path,
         destination,
         source,
         &provenance.path,
+        text,
+        destination_entry(source, destination),
     )?;
     Ok((draft, items))
+}
+
+/// The source's `[[promote.destination]]` entry for a checked-out bundle.
+///
+/// `--refresh` runs from the destination and is given the destination bundle
+/// rather than the name the source calls it, so the entry is found by where it
+/// is checked out. `None` when the source names no destination at that path,
+/// which leaves the owner-domain rule off for the redraft — the right answer,
+/// since the redraft is mechanical and its `owner` is whatever the source
+/// wrote.
+fn destination_entry<'a>(source: &'a Bundle, destination: &Bundle) -> Option<&'a Destination> {
+    let wanted = destination.root.canonicalize().ok()?;
+    source.config.promote.destinations.iter().find(|entry| {
+        source
+            .root
+            .join(&entry.path)
+            .canonicalize()
+            .is_ok_and(|path| path == wanted)
+    })
 }
 
 /// Record a refreshed commit on the promoted page.
