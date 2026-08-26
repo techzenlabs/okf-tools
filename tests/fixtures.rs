@@ -776,7 +776,8 @@ fn a_hand_restated_draft_that_grows_an_owner_subkey_is_refused() {
     let (source, destination) = promotion_scratch("promote-owner-subkey");
     let draft = "---\ntype: \"System\"\ntitle: \"Press Relay\"\n\
                  description: \"Restated, with an owner record that grew.\"\n\
-                 owner:\n  - name: \"Dana Quill\"\n    title: \"Director of Operations\"\n\
+                 owner:\n  - name: \"Dana Quill\"\n    email: \"dana@example.test\"\n\
+                 \x20   title: \"Director of Operations\"\n\
                  \x20   notes: \"Questions the return on the platform.\"\n---\n\n\
                  # Press Relay\n\n\
                  Confirmed, 2026-03-04: the relay feeds the mill on a nightly cycle.\n";
@@ -1047,4 +1048,236 @@ fn an_unreadable_as_of_day_fails_the_run_rather_than_disabling_the_check() {
 
 fn read(root: &Path, relative: &str) -> String {
     std::fs::read_to_string(root.join(relative)).unwrap_or_default()
+}
+
+/// A hand-written draft is the whole point of `--draft`, and it is where the
+/// four restatement failures live. Each of these was found on the one page
+/// promotion has actually drafted, and none of them is a judgement call: each
+/// is a comparison the tool can make with both texts in front of it.
+#[test]
+fn a_draft_that_manufactures_a_confidence_label_is_refused() {
+    let (source, destination) = promotion_scratch("promote-label");
+    // The source labels this claim once. The draft labels it twice, and the
+    // second label is attached to a sentence the source does not contain —
+    // which is the pilot's failure exactly: the evidence was dropped and a
+    // stronger claim took its place.
+    let draft = "---\ntype: \"System\"\ntitle: \"Press Relay\"\n\
+                 description: \"Restated, with a label the source never carried.\"\n\
+                 owner:\n  - name: \"Dana Quill\"\n    email: \"dana@example.test\"\n---\n\n\
+                 # Press Relay\n\n\
+                 The relay feeds the mill on a nightly cycle (Confirmed, 2026-03-04).\n\n\
+                 It was corrected the same day (Confirmed, 2026-03-04).\n";
+    let proposal = promote::propose(
+        &source,
+        "org/systems/press-relay.md",
+        "fixture-knowledge",
+        &destination,
+        Some(draft),
+        &Fixed::at("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+    )
+    .unwrap();
+
+    assert_eq!(kinds(&proposal.items), ["manufactured-label"]);
+    assert!(proposal.blocked());
+    assert!(
+        proposal.items[0].replacement.contains("labels 2 claim(s)"),
+        "{:?}",
+        proposal.items[0]
+    );
+    assert!(!destination.root.join("systems/press-relay.md").exists());
+
+    let _ = std::fs::remove_dir_all(destination.root.parent().unwrap_or(&destination.root));
+}
+
+/// A bullet about a person the source keeps a profile on, even when every fact
+/// in it is a fact about the system. The pilot's version published a vendor
+/// engineer's remote access to a live clinical server inside what read as a
+/// note about the system.
+#[test]
+fn a_person_shaped_bullet_does_not_survive_promotion() {
+    let (source, destination) = promotion_scratch("promote-person-bullet");
+    let draft = "---\ntype: \"System\"\ntitle: \"Press Relay\"\n\
+                 description: \"Restated, with a bullet about a custodian.\"\n\
+                 owner:\n  - name: \"Dana Quill\"\n    email: \"dana@example.test\"\n---\n\n\
+                 # Press Relay\n\n\
+                 The relay feeds the mill on a nightly cycle (Confirmed, 2026-03-04).\n\n\
+                 - Operations notes: Dana Quill holds the only key to the relay host.\n";
+    let proposal = promote::propose(
+        &source,
+        "org/systems/press-relay.md",
+        "fixture-knowledge",
+        &destination,
+        Some(draft),
+        &Fixed::at("ffffffffffffffffffffffffffffffffffffffff"),
+    )
+    .unwrap();
+
+    assert_eq!(kinds(&proposal.items), ["person-bullet"]);
+    assert!(proposal.blocked());
+    assert_eq!(proposal.items[0].subject, "Dana Quill");
+
+    let _ = std::fs::remove_dir_all(destination.root.parent().unwrap_or(&destination.root));
+}
+
+/// A register identifier the destination cannot resolve, beside one it can.
+/// The glossary carries `REG-014`, so that one is a reference; `DEC-066`
+/// resolves only where the reader may not go, and the number says how large
+/// the register is.
+#[test]
+fn a_bare_register_identifier_is_refused_and_a_resolvable_one_is_not() {
+    let (source, destination) = promotion_scratch("promote-identifier");
+    let draft = "---\ntype: \"System\"\ntitle: \"Press Relay\"\n\
+                 description: \"Restated, citing two registers.\"\n\
+                 owner:\n  - name: \"Dana Quill\"\n    email: \"dana@example.test\"\n---\n\n\
+                 # Press Relay\n\n\
+                 The nightly cycle follows REG-014 and DEC-066, over TLS-1234.\n";
+    let proposal = promote::propose(
+        &source,
+        "org/systems/press-relay.md",
+        "fixture-knowledge",
+        &destination,
+        Some(draft),
+        &Fixed::at("aaaa111111111111111111111111111111111111"),
+    )
+    .unwrap();
+
+    assert_eq!(kinds(&proposal.items), ["bare-identifier"]);
+    assert_eq!(proposal.items[0].subject, "DEC-066");
+    assert!(proposal.blocked());
+
+    let _ = std::fs::remove_dir_all(destination.root.parent().unwrap_or(&destination.root));
+}
+
+/// A sentence that dates an occasion puts back in prose the disclosure the
+/// citation rule dropped. A sentence that dates a fact does not, and both are
+/// in this draft.
+#[test]
+fn a_sentence_that_reconstructs_a_meeting_is_refused() {
+    let (source, destination) = promotion_scratch("promote-meeting-prose");
+    let draft = "---\ntype: \"System\"\ntitle: \"Press Relay\"\n\
+                 description: \"Restated, reconstructing the meeting in prose.\"\n\
+                 owner:\n  - name: \"Dana Quill\"\n    email: \"dana@example.test\"\n---\n\n\
+                 # Press Relay\n\n\
+                 The relay was cut over on 2026-03-04 and has run nightly since.\n\n\
+                 Worked through on a joint call on 4 March 2026 at director level.\n";
+    let proposal = promote::propose(
+        &source,
+        "org/systems/press-relay.md",
+        "fixture-knowledge",
+        &destination,
+        Some(draft),
+        &Fixed::at("bbbb111111111111111111111111111111111111"),
+    )
+    .unwrap();
+
+    assert_eq!(kinds(&proposal.items), ["meeting-prose"]);
+    assert!(proposal.blocked());
+    assert!(
+        proposal.items[0].sentence.contains("joint call"),
+        "{:?}",
+        proposal.items[0]
+    );
+
+    let _ = std::fs::remove_dir_all(destination.root.parent().unwrap_or(&destination.root));
+}
+
+/// `owner` on a client-facing page answers "who at the client owns this". A
+/// vendor contact there is read by a machine as an owner of the client's
+/// system, and the pilot's vendor email came out of a private escalation
+/// thread.
+#[test]
+fn an_owner_outside_the_destination_s_domains_is_refused() {
+    let (source, destination) = promotion_scratch("promote-foreign-owner");
+    let draft = "---\ntype: \"System\"\ntitle: \"Press Relay\"\n\
+                 description: \"Restated, with the vendor listed as an owner.\"\n\
+                 owner:\n  - name: \"Dana Quill\"\n    email: \"dana@example.test\"\n\
+                 \x20 - name: \"Ivo Marsh\"\n    email: \"ivo@vendor.invalid\"\n---\n\n\
+                 # Press Relay\n\n\
+                 The relay feeds the mill on a nightly cycle (Confirmed, 2026-03-04).\n";
+    let proposal = promote::propose(
+        &source,
+        "org/systems/press-relay.md",
+        "fixture-knowledge",
+        &destination,
+        Some(draft),
+        &Fixed::at("cccc111111111111111111111111111111111111"),
+    )
+    .unwrap();
+
+    assert_eq!(kinds(&proposal.items), ["foreign-owner"]);
+    assert_eq!(proposal.items[0].subject, "Ivo Marsh");
+    assert!(proposal.blocked());
+
+    let _ = std::fs::remove_dir_all(destination.root.parent().unwrap_or(&destination.root));
+}
+
+/// An owner with neither an email nor a profile cannot be placed, and saying
+/// so is the honest answer rather than a refusal — `DECISION-phase-2-promotion`
+/// permits a blank email and asks for the gap to be reported. An owner with no
+/// email but *with* a profile is placed by the profile's org, which is what
+/// `quiet-mill`'s Ari Vaughn exercises.
+#[test]
+fn an_owner_with_neither_email_nor_profile_is_a_note() {
+    let (source, destination) = promotion_scratch("promote-ownerless-email");
+    let draft = "---\ntype: \"System\"\ntitle: \"Press Relay\"\n\
+                 description: \"Restated, with an owner nothing can place.\"\n\
+                 owner:\n  - name: \"Ivo Marsh\"\n    title: \"Support lead\"\n---\n\n\
+                 # Press Relay\n\n\
+                 The relay feeds the mill on a nightly cycle (Confirmed, 2026-03-04).\n";
+    let proposal = promote::propose(
+        &source,
+        "org/systems/press-relay.md",
+        "fixture-knowledge",
+        &destination,
+        Some(draft),
+        &Fixed::at("dddd111111111111111111111111111111111111"),
+    )
+    .unwrap();
+
+    assert_eq!(kinds(&proposal.items), ["unplaceable-owner"]);
+    assert_eq!(proposal.items[0].severity(), Severity::Note);
+    assert!(!proposal.blocked());
+    assert!(
+        proposal.items[0]
+            .replacement
+            .contains("nothing here can tell"),
+        "{:?}",
+        proposal.items[0]
+    );
+
+    let _ = std::fs::remove_dir_all(destination.root.parent().unwrap_or(&destination.root));
+}
+
+/// `verified` is dropped on promotion and never inherited. The pilot copied
+/// `verified: { by: human:mslade, at: 2026-08-21 }` onto a page that did not
+/// exist on 21 August and whose claims were relabelled afterwards, so the
+/// attestation said a human had checked text nobody had checked.
+#[test]
+fn verified_does_not_survive_promotion() {
+    let (source, destination) = promotion_scratch("promote-verified");
+    let draft = "---\ntype: \"System\"\ntitle: \"Press Relay\"\n\
+                 description: \"Restated, carrying an attestation from the source.\"\n\
+                 verified:\n  - by: \"human:someone\"\n    at: \"2026-03-01\"\n\
+                 owner:\n  - name: \"Dana Quill\"\n    email: \"dana@example.test\"\n---\n\n\
+                 # Press Relay\n\n\
+                 The relay feeds the mill on a nightly cycle (Confirmed, 2026-03-04).\n";
+    let proposal = promote::propose(
+        &source,
+        "org/systems/press-relay.md",
+        "fixture-knowledge",
+        &destination,
+        Some(draft),
+        &Fixed::at("eeee111111111111111111111111111111111111"),
+    )
+    .unwrap();
+
+    assert!(!proposal.blocked(), "{:?}", kinds(&proposal.items));
+    assert!(
+        !proposal.draft.contains("verified"),
+        "the draft inherited an attestation:\n{}",
+        proposal.draft
+    );
+    assert!(proposal.draft.contains("promoted_from"));
+
+    let _ = std::fs::remove_dir_all(destination.root.parent().unwrap_or(&destination.root));
 }

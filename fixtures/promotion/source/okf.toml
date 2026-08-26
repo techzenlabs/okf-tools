@@ -19,6 +19,13 @@ evidence_prefixes = ["meetings"]
 name = "fixture-knowledge"
 path = "../destination"
 url = "https://docs.example.test/knowledge"
+# The client's own domain, and only it. An owner reached for outside this list
+# is a vendor contact wearing the word `owner`, which a machine consumer reads
+# as an owner of the client's system.
+owner_domains = ["example.test"]
+# And for an owner the record leaves without an email, which the promotion
+# decision explicitly allows: the profile's `Org / role` is what places them.
+owner_orgs = ["Example Works"]
 
 # First match wins, so the page that belongs beside code is named above the
 # shape that would otherwise sweep it into the knowledge bundle.
