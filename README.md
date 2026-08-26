@@ -500,12 +500,19 @@ A **profile link** resolves into a plain name, or into the page's `owner`
 record. A name in prose is contact identity and publishes. A link into a
 profile is a pointer at somebody's read on a person, and it does not.
 
-An **evidence link** resolves by restating the claim as a dated statement
-carrying its own Confirmed / Assumed / Needs-confirmation label, with the
-citation dropped. Keeping the link and marking it unreachable was considered
-and rejected: `meetings/2026-07-24-fax-report/summary.md` names a meeting, its
-date and its subject, and the raw-markdown publishing route emits that string
-whatever a rendered page does with the link.
+An **evidence link** resolves by restating the claim as a dated statement,
+with the citation dropped. Keeping the link and marking it unreachable was
+considered and rejected: `meetings/2026-07-24-fax-report/summary.md` names a
+meeting, its date and its subject, and the raw-markdown publishing route emits
+that string whatever a rendered page does with the link.
+
+The statement takes the date and **not** a confidence label. This paragraph
+used to say "carrying its own Confirmed / Assumed / Needs-confirmation label",
+and that sentence is what produced sixteen manufactured `Confirmed`s on the
+one page promotion has drafted: where a citation was dropped, a label appeared
+in the hole it left. A restatement carries the label its *source* carries, and
+`manufactured-label` below is that rule as a gate rather than as a sentence in
+a brief.
 
 What no checker can see is characterisation. A sentence carrying a read on
 somebody is forbidden by the same rule that forbids the profile, and no pattern
