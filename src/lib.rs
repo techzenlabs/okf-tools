@@ -34,6 +34,7 @@ pub mod promote;
 pub mod restate;
 pub mod retype;
 pub mod scan;
+pub mod serve;
 pub mod sitegen;
 pub mod sitelinks;
 pub mod staleness;
