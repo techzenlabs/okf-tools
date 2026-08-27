@@ -5,13 +5,139 @@
   OKF document conventionally opens with its own `# Title`, so a template that
   always emitted one would put two first-level headings on every page in the
   estate — legal HTML, wrong document, and invisible to any build check.
+
+  The description renders under the H1 as a lede, the same demotion A5 made
+  on `list.html`. It used to render above the title, where it read as an
+  orphan grey paragraph — and worse than on a section, because on a third of
+  gill's described documents (121 of 376, measured) the description is a
+  prefix of the document's own first paragraph, so the page opened by saying
+  the same sentence twice. The description is not suppressed on those:
+  comparing rendered prose to front matter is fragile, and the other 255
+  described documents carry real summary text that would go with it. The
+  document's own leading `<h1>` is split off `.Content` so the lede can sit
+  between it and the body; unlike `list.html`, the H1 itself is kept
+  byte-for-byte — a document's title is the document's, not this template's.
+  A page whose only `<h1>` is *not* the leading element keeps the old shape,
+  description first, because there is no title for a lede to sit under.
+
+  SIBLING NAVIGATION (A7). The root lists no documents and a section's
+  listing lives one click up, so a reader at a leaf could go up via the
+  breadcrumb and nowhere else — at a work item whose issue, plan, runbook
+  and journal are peers a reader moves between constantly, that is a
+  round-trip through the parent for every hop. The nav below renders the
+  document's siblings at the foot of the page: a Previous/Next pair for
+  stepping, and the full sibling list for jumping, folded behind a count
+  past the same 20-entry line `list.html` folds at (measured sibling counts
+  across the four tenants: 2–11 everywhere except techzen's 28 and ria's
+  109, 72, 71 and 21 — any line between 11 and 21 separates a work item
+  from an archive, and sharing `list.html`'s number means the two folds
+  fire at the same scale).
+
+  Siblings are `.CurrentSection.RegularPages` and nothing else. That is
+  what makes the nav correct at a page whose own directory has no section:
+  gill's `[index] no_index_under = ["plans"]` means `plans/active/` gets no
+  `index.md`, Hugo builds no section for it, and its pages attach to the
+  nearest ancestor that *is* a section — `plans/` — which is also where
+  their published page actually lives in Hugo's tree. So the eleven
+  execution plans orphaned under `plans/{active,archive,templates}` list
+  each other here, every href resolves to a page that exists, and the
+  section link in the heading points at `plans/`, which has a page.
+  (Verified against the fixture's `alpha/loose/`, the same shape: no
+  section page is published for it and its two notes roll up to `alpha`.)
+
+  The order is `RelPermalink`, ascending, and deliberately not Hugo's
+  default. `.PrevInSection`/`.NextInSection` walk weight, then date, then
+  link title — and this corpus carries no weight and no date (measured in
+  the plan: three front-matter keys estate-wide), so the default collapses
+  to title order, which files the clippy work item's four documents as
+  ExecPlan, Execution Journal, Implement Runbook, Issue Brief: an accident
+  of doc-type phrasing. Nor is it okf-index's filename-byte order, which
+  puts `PLANS.md` first because uppercase sorts before lowercase in ASCII.
+  `RelPermalink` is the order `list.html`'s built listing already shows on
+  the parent section page, so Previous and Next walk the same list the
+  reader descended through; it is lowercase-normalised, so `PLANS.md` and
+  `plans.md` file identically; and dated slugs (`20260310-…`, `001-…`)
+  come out chronological, which is the one order an archive reader wants.
+  Where the parent still renders the generated block verbatim (the set
+  inequality fallback), the two listings can disagree on order — that is
+  the fallback's price, and losing entries would be dearer.
+
+  The nav renders only when there are at least two siblings (a list of one
+  is the page itself) and is `data-pagefind-ignore`d: a document's
+  neighbours are not the document's content, and unignored they would put
+  every sibling's title into every excerpt in a section.
 */ -}}
 {{ define "main" }}
+{{- $body := printf "%s" .Content }}
+{{- $lead := "" }}
+{{- with findRE `(?s)^\s*<h1[^>]*>.*?</h1>` $body 1 }}
+  {{- $lead = index . 0 }}
+  {{- $body = strings.TrimPrefix $lead $body }}
+{{- end }}
 <article class="okf-page">
-  {{- if not (strings.Contains .Content "<h1") }}
+  {{- if $lead }}
+  {{ $lead | safeHTML }}
+  {{- else if not (strings.Contains $body "<h1") }}
   <h1>{{ partial "okf-meta.html" (dict "page" . "region" "title") }}</h1>
   {{- end }}
   {{- partial "okf-meta.html" (dict "page" . "region" "summary" "class" "okf-description") }}
-  {{ .Content }}
+  {{ $body | safeHTML }}
 </article>
+{{- $cur := . }}
+{{- $sibs := slice }}
+{{- with .CurrentSection }}{{ $sibs = sort .RegularPages "RelPermalink" }}{{ end }}
+{{- if ge (len $sibs) 2 }}
+{{- $sec := .CurrentSection }}
+{{- $i := -1 }}
+{{- range $k, $p := $sibs }}{{ if $p.Eq $cur }}{{ $i = $k }}{{ end }}{{ end }}
+<nav class="okf-siblings" data-pagefind-ignore aria-label="Documents in the same section">
+  {{- if ge $i 0 }}
+  {{- $prev := false }}
+  {{- $next := false }}
+  {{- if gt $i 0 }}{{ $prev = index $sibs (sub $i 1) }}{{ end }}
+  {{- if lt (add $i 1) (len $sibs) }}{{ $next = index $sibs (add $i 1) }}{{ end }}
+  <div class="okf-sib-step">
+    {{- with $prev }}
+    <a rel="prev" href="{{ .RelPermalink }}"><span class="okf-sib-dir">Previous</span>{{ partial "okf-meta.html" (dict "page" . "region" "title") }}</a>
+    {{- end }}
+    {{- with $next }}
+    <a rel="next" href="{{ .RelPermalink }}"><span class="okf-sib-dir">Next</span>{{ partial "okf-meta.html" (dict "page" . "region" "title") }}</a>
+    {{- end }}
+  </div>
+  {{- end }}
+  <h2 class="okf-sib-heading">In <a href="{{ $sec.RelPermalink }}">{{ partial "okf-meta.html" (dict "page" $sec "region" "title") }}</a></h2>
+  {{- $n := len $sibs }}
+  {{- if gt $n 20 }}
+  <details class="okf-fold">
+    <summary>{{ $n }} documents</summary>
+    {{- partial "okf-sib-items.html" (dict "pages" $sibs "cur" $cur) }}
+  </details>
+  {{- else }}
+  {{- partial "okf-sib-items.html" (dict "pages" $sibs "cur" $cur) }}
+  {{- end }}
+</nav>
+{{- end }}
+{{ end }}
+
+{{- /*
+  The sibling list itself, once: the open form and the folded form render
+  the same items, so there is exactly one place a sibling entry is built.
+  The current page is a marked span, not a self-link — `aria-current` is
+  the accessible form of "you are here", and a link to the page it is on
+  is a reader trap. Titles go through the `title` region for the same
+  reason every other listing's do: a page with no `title` key otherwise
+  renders an anchor with nothing inside it.
+*/ -}}
+{{ define "partials/okf-sib-items.html" }}
+<ul class="okf-listing okf-sib-list">
+  {{- range .pages }}
+  <li>
+    {{- if .Eq $.cur }}
+    <span class="okf-sib-here" aria-current="page">{{ partial "okf-meta.html" (dict "page" . "region" "title") }}</span>
+    {{- else }}
+    <a href="{{ .RelPermalink }}">{{ partial "okf-meta.html" (dict "page" . "region" "title") }}</a>
+    {{- end }}
+  </li>
+  {{- end }}
+</ul>
 {{ end }}

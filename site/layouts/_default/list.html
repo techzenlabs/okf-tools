@@ -1,35 +1,139 @@
 {{- /*
   A section, or a taxonomy term.
 
-  A section's rendered body *is* the listing `okf-index` generated into its
-  `index.md`, so the human listing and the site navigation agree by
-  construction. `.Content` is empty for a term page and for a directory that
-  carries no `index.md`, which §11 permits, so the fallback below lists the
-  pages Hugo found rather than showing a reader an empty page — and when
-  there are none of those either, a sentence rather than an empty `<ul>`.
-  §11 says render it; rendering it politely is allowed.
+  A section's rendered body is the listing `okf-index` generated into its
+  `index.md`. Printed verbatim, that listing is a flat run of bare directory
+  slugs: no counts, no descriptions Hugo could clamp, `active` and `archive`
+  as two identical words hiding 13 and 820 pages. So where the template can
+  *prove* the generated block lists exactly the children Hugo knows about, it
+  renders its own navigation from `.Pages` instead — titles through the
+  `title` region, descriptions through the `summary` region, a recursive page
+  count on every subsection.
 
-  The fallback links through the `title` region for the same reason the
+  The proof is set equality over hrefs, and it is load-bearing.
+  `.Pages` does not reproduce `okf-index` in general: okf-index sorts by
+  filename bytes and lists documents before sections while Hugo does not;
+  `[index] group_by_month` may link a summary inside a child rather than the
+  child; `[index] suppress` empties a block Hugo would fill; `no_index_under`
+  links directories Hugo builds no section for (a nested directory without an
+  `index.md` is not a section at all, and its pages attach to the nearest
+  ancestor section); mirror `title_strip` rewrites titles Hugo sees
+  unstripped; `log.md` is excluded by okf-index and included by Hugo. When
+  the href set inside the markers is not exactly the href set of `.Pages`,
+  every one of those divergences degrades to the generated block rendered
+  verbatim rather than to a listing that silently lost entries.
+
+  The markers are matched by *prefix*: this repository's fixture carries the
+  legacy `<!-- BEGIN OKF INDEX -->` while `src/index.rs` now writes
+  `<!-- BEGIN OKF INDEX (tools/okf-index) -->`. Matching the current form
+  exactly would no-op on the fixture and every gate against it would pass
+  vacuously. Both markers survive Goldmark into `.Content` (measured across
+  all 233 generated section pages in the estate), so the split runs on the
+  rendered HTML and the tenant's prose on either side of the block — the
+  lead paragraph before it, anything after it — is kept byte-for-byte.
+
+  One title per page: the generated markdown opens with `# <dirname>`, so
+  the raw directory name became the H1 while the breadcrumb rendered the
+  `title` region and the two disagreed on the same screen. A leading `<h1>`
+  in `.Content` is dropped and the template's own H1 — the same `title`
+  region the crumb uses — renders instead. An H1 that is *not* the leading
+  element is left alone and the template adds none, which is the old guard's
+  behavior kept for content this template did not generate.
+
+  `.Content` is empty for a term page and for a directory that carries no
+  `index.md`, which §11 permits, so the fallback below lists the pages Hugo
+  found rather than showing a reader an empty page — and when there are none
+  of those either, a sentence rather than an empty `<ul>`. §11 says render
+  it; rendering it politely is allowed. The fallback and the built listing
+  are one construct, the inline partial at the bottom of this file.
+
+  Entry titles link through the `title` region for the same reason the
   breadcrumb does: a subsection has no `title` to link with, and `.Title`
-  alone produced an anchor with no text inside it.
+  alone produced an anchor with no text inside it. Descriptions go through
+  the `summary` region and never raw: its parking pass is what stops a
+  description opening `</ul></li>` from closing the listing that holds it.
 */ -}}
 {{ define "main" }}
+{{- $body := printf "%s" .Content }}
+{{- $ownH1 := true }}
+{{- if findRE `^\s*<h1[^>]*>` $body 1 }}
+  {{- $body = replaceRE `(?s)^\s*<h1[^>]*>.*?</h1>\s*` "" $body 1 }}
+{{- else if strings.Contains $body "<h1" }}
+  {{- $ownH1 = false }}
+{{- end }}
+{{- /* Marker prefixes, and exactly one of each: a document that quotes the
+       markers in its own prose is content, not a listing, and splits on it
+       would shear the page. More or fewer than one pair renders verbatim. */}}
+{{- $begin := "<!-- BEGIN OKF INDEX" }}
+{{- $end := "<!-- END OKF INDEX -->" }}
+{{- $head := "" }}
+{{- $tail := "" }}
+{{- $docs := slice }}
+{{- $secs := slice }}
+{{- $replaced := false }}
+{{- if and (eq (strings.Count $begin $body) 1) (eq (strings.Count $end $body) 1) }}
+  {{- $outer := split $body $begin }}
+  {{- $inner := split (index $outer 1) $end }}
+  {{- /* len 2 means END follows BEGIN; an inverted pair falls through. */}}
+  {{- if eq (len $inner) 2 }}
+    {{- /* The block still opens with the rest of the BEGIN comment — ` -->`
+           legacy, ` (tools/okf-index) -->` current. Neither form contains
+           `>` before its terminator, so one strip covers both. */}}
+    {{- $block := replaceRE `^[^>]*-->` "" (index $inner 0) 1 }}
+    {{- $got := slice }}
+    {{- range findRE `href="[^"]*"` $block }}
+      {{- $got = $got | append (strings.TrimSuffix "\"" (strings.TrimPrefix "href=\"" .)) }}
+    {{- end }}
+    {{- $want := slice }}
+    {{- range .Pages }}{{ $want = $want | append .RelPermalink }}{{ end }}
+    {{- if and $got $want (eq (delimit (uniq (sort $got)) "\n") (delimit (uniq (sort $want)) "\n")) }}
+      {{- $head = index $outer 0 }}
+      {{- $tail = index $inner 1 }}
+      {{- $docs = sort (where .Pages "Kind" "page") "RelPermalink" }}
+      {{- $secs = sort (where .Pages "Kind" "ne" "page") "RelPermalink" }}
+      {{- $replaced = true }}
+    {{- end }}
+  {{- end }}
+{{- end }}
 <section class="okf-section">
-  {{- if not (strings.Contains .Content "<h1") }}
+  {{- if $ownH1 }}
   <h1>{{ partial "okf-meta.html" (dict "page" . "region" "title") }}</h1>
   {{- end }}
   {{- partial "okf-meta.html" (dict "page" . "region" "summary" "class" "okf-description") }}
-  {{ .Content }}
+  {{- if $replaced }}
+  {{ $head | safeHTML }}
+  {{- /* Fold a partition only past a screenful — the estate's listings run
+         3, 5, 12, 13, 77 and 820 entries, so any line between 13 and 77
+         separates the same pages; 20 is roughly one viewport of rows and
+         leaves headroom over the largest ordinary section. Never fold when
+         the listing is the page's only prose: a page collapsed to a single
+         summary line is worse than the scroll, and "only" is measured as
+         the tenant's own text outside the markers plainifying to nothing. */}}
+  {{- $prose := ne (strings.TrimSpace (plainify (printf "%s %s" $head $tail))) "" }}
+  {{- $foldAt := 20 }}
+  <nav class="okf-nav" data-pagefind-ignore aria-label="Pages in this section">
+    {{- with $docs }}
+    {{- partial "okf-nav-list.html" (dict "pages" . "noun" "document" "fold" (and $prose (gt (len .) $foldAt))) }}
+    {{- end }}
+    {{- with $secs }}
+    <h2 class="okf-nav-heading">Sections</h2>
+    {{- partial "okf-nav-list.html" (dict "pages" . "noun" "section" "fold" (and $prose (gt (len .) $foldAt))) }}
+    {{- end }}
+  </nav>
+  {{ $tail | safeHTML }}
+  {{- else }}
+  {{ $body | safeHTML }}
+  {{- end }}
   {{- if not .Content }}
   {{- if .Pages }}
-  <ul class="okf-fallback okf-listing">
-    {{- range .Pages }}
-    <li>
-      <a href="{{ .RelPermalink }}">{{ partial "okf-meta.html" (dict "page" . "region" "title") }}</a>
-      {{- partial "okf-meta.html" (dict "page" . "region" "summary") }}
-    </li>
+  <nav class="okf-nav" data-pagefind-ignore aria-label="Pages in this section">
+    {{- with sort (where .Pages "Kind" "page") "RelPermalink" }}
+    {{- partial "okf-nav-list.html" (dict "pages" . "noun" "document" "fold" false) }}
     {{- end }}
-  </ul>
+    {{- with sort (where .Pages "Kind" "ne" "page") "RelPermalink" }}
+    {{- partial "okf-nav-list.html" (dict "pages" . "noun" "section" "fold" false) }}
+    {{- end }}
+  </nav>
   {{- else }}
   <p class="okf-empty">Nothing is filed under
     {{ partial "okf-meta.html" (dict "page" . "region" "title") }} yet.</p>
@@ -37,3 +141,39 @@
   {{- end }}
 </section>
 {{ end }}
+
+{{- /*
+  One partition of a listing: the documents, or the subsections. Both the
+  proven replacement above and the no-`.Content` fallback render through
+  this, so there is exactly one place a listing entry is built.
+
+  A subsection entry carries `len .RegularPagesRecursive`, the one number
+  that tells an 820-page archive from a 5-page template shelf, with the
+  plural agreeing with the number. A regular page carries none.
+
+  The wrapping `<nav>` is `data-pagefind-ignore`d by its caller: a section's
+  navigation is not the section's content, and unignored listings are what
+  filled every search excerpt with boilerplate before.
+*/ -}}
+{{ define "partials/okf-nav-list.html" }}
+{{- $n := len .pages }}
+{{- if .fold }}
+<details class="okf-fold">
+  <summary>{{ $n }} {{ .noun }}{{ if ne $n 1 }}s{{ end }}</summary>
+{{- end }}
+<ul class="okf-listing">
+  {{- range .pages }}
+  <li>
+    <a href="{{ .RelPermalink }}">{{ partial "okf-meta.html" (dict "page" . "region" "title") }}</a>
+    {{- if ne .Kind "page" }}
+    {{- $count := len .RegularPagesRecursive }}
+    <span class="okf-nav-count">{{ $count }} page{{ if ne $count 1 }}s{{ end }}</span>
+    {{- end }}
+    {{- partial "okf-meta.html" (dict "page" . "region" "summary") }}
+  </li>
+  {{- end }}
+</ul>
+{{- if .fold }}
+</details>
+{{- end }}
+{{- end }}

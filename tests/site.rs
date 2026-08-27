@@ -48,13 +48,14 @@ fn assemble_fixture(label: &str) -> (PathBuf, assemble::Outcome) {
 fn assembly_renames_every_index_and_lands_the_shared_files() {
     let (root, outcome) = assemble_fixture("assemble");
     assert_eq!(outcome.bundles, 2);
-    assert_eq!(outcome.files, 19);
-    // Eight `index.md` across the two bundles, and not one survives under that
-    // name: Hugo would read each of their directories as a leaf bundle. Still
-    // eight with `alpha/loose/` in the fixture: that directory deliberately
-    // has none, which is what makes `list.html` fall back to listing the
-    // pages Hugo found.
-    assert_eq!(outcome.renamed, 8);
+    assert_eq!(outcome.files, 99);
+    // Seventeen `index.md` across the two bundles, and not one survives under
+    // that name: Hugo would read each of their directories as a leaf bundle.
+    // Seventeen, not eighteen, with `alpha/loose/` in the fixture: that
+    // directory deliberately has none, which is what makes `list.html` fall
+    // back to listing the pages Hugo found — and `alpha/journal/log.md` is a
+    // page, not an index, however listing-shaped its directory is.
+    assert_eq!(outcome.renamed, 17);
     assert_eq!(outcome.local, ["alpha", "beta"]);
 
     for path in [
