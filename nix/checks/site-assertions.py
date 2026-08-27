@@ -319,3 +319,471 @@ print(
     f"holds in the `type` filter, {len(records)} JSON records match "
     f"{raw_pages} raw pages, and Pagefind carries {sorted(facets)}"
 )
+
+# ======================================================================
+# The navigation pass: section navigation (A1/A3/A4/A5), the site-wide
+# search mount (A2) and sibling navigation at a leaf (A7). Same standard
+# as everything above: each assertion was watched failing before it was
+# believed, and each failure it guards is a successful build with wrong
+# output. The negative controls that produced those failures are recorded
+# beside each assertion, and every one was confirmed *applied* — the
+# broken shape was seen in `public/` — before the red was trusted,
+# because a control that silently fails to apply reports a green that
+# reads exactly like a load-bearing gate.
+# ======================================================================
+
+
+def section_body(page, where):
+    """The `okf-section` block of a section page, which is where the
+    generated listing lives and where its replacement must render."""
+    match = re.search(r'<section class="okf-section">(.*?)</section>', page, re.S)
+    if not match:
+        fail(f"{where} renders no okf-section block")
+    return match.group(1)
+
+
+def nav_of(body, where):
+    """The built navigation, and on failure the cause that actually applies.
+
+    Two distinct breaks land here and the message must not conflate them:
+    the set-equality proof not firing leaves the generated markers in the
+    body, while a proof that fired into the wrong element (a nav demoted to
+    `<div>`, which also drops Pagefind's default `<nav>` skip and leaks the
+    listing into the index) leaves no markers and no `<nav>` either.
+    Watched misattributing: with the element demoted, the old single
+    message blamed the proof, which had fired.
+    """
+    match = re.search(r'<nav class="okf-nav"[^>]*>(.*?)</nav>', body, re.S)
+    if not match:
+        if "BEGIN OKF INDEX" in body:
+            fail(f"{where} still carries the generated block and built no okf-nav; the set-equality proof did not fire")
+        fail(f'{where} replaced its generated block but renders no <nav class="okf-nav">; the listing element is missing or demoted')
+    return match.group(0)
+
+
+def h1s(page):
+    return [text.strip() for text in re.findall(r"<h1[^>]*>(.*?)</h1>", page, re.S)]
+
+
+# --- A1, the replaced path. Where the generated block's href set equals
+# `.Pages`, the markers are gone, the built nav is there and ignored by
+# Pagefind, and its entries are exactly the hrefs the block held — both
+# marker forms, because the fixture's legacy `<!-- BEGIN OKF INDEX -->`
+# and the current `(tools/okf-index)` form must both match by prefix.
+# Watched failing with the template matching the current form exactly:
+# every legacy page fell through to verbatim and this reported the marker
+# still present on /alpha/runbooks/.
+replaced = {
+    # legacy marker form
+    "alpha/runbooks/index.html": ["/alpha/runbooks/quiet-page/", "/alpha/runbooks/relay-restart/"],
+    "alpha/mixed/index.html": [
+        "/alpha/mixed/implement/", "/alpha/mixed/plans/",
+        "/alpha/mixed/deep/", "/alpha/mixed/guides/", "/alpha/mixed/spare/",
+    ],
+    "beta/index.html": ["/beta/notes/"],
+    # current marker form
+    "alpha/bulk/index.html": [f"/alpha/bulk/entry-{i:02d}/" for i in range(1, 22)],
+    "alpha/stream/index.html": [f"/alpha/stream/item-{i:02d}/" for i in range(1, 22)],
+    "alpha/ledger/index.html": [f"/alpha/ledger/row-{i:02d}/" for i in range(1, 21)],
+}
+for path, wanted in replaced.items():
+    page = read(path)
+    if "BEGIN OKF INDEX" in page:
+        fail(f"{path} still carries the generated markers; the replacement did not fire")
+    body = section_body(page, path)
+    nav = nav_of(body, path)
+    if "data-pagefind-ignore" not in nav:
+        fail(f"{path}'s okf-nav is not data-pagefind-ignore'd")
+    if sorted(entries(nav)) != sorted(wanted):
+        fail(f"{path}'s built nav lists {sorted(entries(nav))}, not the block's own {sorted(wanted)}")
+
+# The tenant's prose on both sides of the markers survives the swap. The
+# mixed fixture writes a lead paragraph above BEGIN and a closing note
+# after END. Watched failing with `$head` dropped from the template: the
+# lead paragraph vanished and only this noticed.
+mixed = read("alpha/mixed/index.html")
+body = section_body(mixed, "/alpha/mixed/")
+nav = nav_of(body, "/alpha/mixed/")
+lead = "This lead paragraph is\ntenant prose outside the markers"
+tail = "The closing note, after the generated block"
+if lead not in body:
+    fail("the mixed section lost its lead paragraph in the replacement")
+if tail not in body:
+    fail("the mixed section lost the prose after the END marker")
+if not body.index(lead) < body.index('okf-nav') < body.index(tail):
+    fail("the mixed section's prose did not stay on its own side of the built nav")
+
+# The documents-then-sections partition, in the order okf-index's
+# `## Sections` sub-heading promises: documents first, the heading, then
+# subsections, each partition in RelPermalink order. The implement/plans
+# pair pins the *key*, not merely the direction: `PLANS.md` sorts before
+# `implement.md` in filename bytes, and its title `ExecPlan` sorts before
+# `Implement`, so byte order, title order and Hugo's weight/date/linkTitle
+# default (which collapses to title on this dateless, weightless corpus)
+# all list plans first — only RelPermalink ascending lists implement
+# first. Watched failing three ways: sort key swapped to "Title", the
+# sort removed entirely (Hugo's default), and the direction flipped
+# descending; every fixture title elsewhere agrees with its slug, so
+# before the ExecPlan retitle the first two of those shipped green.
+order = [
+    "/alpha/mixed/implement/", "/alpha/mixed/plans/", "okf-nav-heading",
+    "/alpha/mixed/deep/", "/alpha/mixed/guides/", "/alpha/mixed/spare/",
+]
+positions = [nav.index(needle) for needle in order]
+if positions != sorted(positions):
+    fail(f"the mixed nav is not documents-then-Sections in permalink order: {order} at {positions}")
+
+# --- The fallback. Where the sets differ the block renders verbatim,
+# markers and all, and no nav is added. Two shapes:
+#
+#   1. /alpha/ — the handwritten block omits `untyped.md` and the two
+#      `loose/` pages Hugo attaches to the section, so the sets differ by
+#      three entries.
+#   2. /alpha/journal/ — the divergence is exactly okf-index's `log.md`
+#      rule: excluded from every generated listing, published by Hugo
+#      like any page. Asserted as an equation, block ∪ {log} = published
+#      children, so it is the log page and nothing else that fired the
+#      fallback. Watched failing twice: with the fixture's log.md
+#      deleted (the sets become equal, the block is replaced, and both
+#      the marker and the equation assertions fired), and with the
+#      template's set-equality guard removed (every fallback page lost
+#      its block).
+for path, kept in (
+    ("alpha/index.html", ["/alpha/runbooks/", "/alpha/decisions/", "/alpha/documentation/", "/alpha/archive/"]),
+    ("alpha/journal/index.html", ["/alpha/journal/entry-one/"]),
+):
+    page = read(path)
+    body = section_body(page, path)
+    if "<!-- BEGIN OKF INDEX" not in body or "<!-- END OKF INDEX -->" not in body:
+        fail(f"{path} diverges from `.Pages` but lost its generated markers")
+    if 'class="okf-nav"' in body:
+        fail(f"{path} renders a built nav on the fallback path; divergence must add nothing")
+    block = body.split("<!-- BEGIN OKF INDEX")[1].split("<!-- END OKF INDEX -->")[0]
+    if sorted(entries(block)) != sorted(kept):
+        fail(f"{path}'s generated block holds {sorted(entries(block))}, not all of {sorted(kept)}")
+
+published = {
+    "/alpha/journal/" + p.rstrip("/").split("/")[-1] + "/"
+    for p in glob.glob(f"{site}/public/alpha/journal/*/")
+}
+journal_block = section_body(read("alpha/journal/index.html"), "journal")
+if set(entries(journal_block.split("<!-- BEGIN OKF INDEX")[1])) | {"/alpha/journal/log/"} != published:
+    fail(
+        "the journal fallback did not fire on the log.md divergence alone: "
+        f"block ∪ log is not the published set {sorted(published)}"
+    )
+
+# --- A4. One title per page, and it is the breadcrumb's own string. The
+# generated `# <dirname>` H1 is stripped and the template renders the
+# `title` region — the same region the crumb renders — so the two cannot
+# disagree. Asserted as the one comparison it is: every crumb on the
+# deepest fixture page names a section page whose sole H1 renders the
+# same text, on the fallback path (/alpha/, where the raw H1 said
+# "Alpha") and the replaced path both. Watched failing with the H1 strip
+# removed: /alpha/ carried two H1s, the first reading "Alpha" against
+# the crumb's "Alpha, the first bundle".
+crumbs = Crumbs()
+crumbs.feed(read("alpha/archive/2026/awkward-description/index.html"))
+if not crumbs.trail:
+    fail("the deep fixture page lost its breadcrumb; the H1 agreement below has nothing to compare")
+for href, text in crumbs.trail:
+    titles = h1s(read(href.lstrip("/") + "index.html"))
+    if len(titles) != 1:
+        fail(f"{href} renders {len(titles)} H1s; one title per page")
+    if titles != [text]:
+        fail(f"{href}'s H1 says {titles} while its own breadcrumb crumb says {text!r}")
+
+# --- A5. The section description renders as a lede under the H1, not an
+# orphan paragraph above it. Same shape as the facets assertion.
+alpha = read("alpha/index.html")
+if alpha.index("okf-description") < alpha.index("<h1"):
+    fail("the section description renders above the H1; it is a lede, not a preamble")
+
+# A5 at the leaf, where the same orphan read worst: a third of gill's
+# described documents (121 of 376, measured) carry a description that is
+# a prefix of their own first paragraph, so `single.html` opened with the
+# same sentence grey above the title and again below it. The fix is the
+# same demotion, not suppression — 255 described documents do not
+# duplicate and would lose real summary text. relay-restart carries a
+# description *and* its own `# Restart the relay`, so all three parts
+# must hold their order: the document's H1, then the lede, then the
+# body's first paragraph, with the H1 kept byte-for-byte. Watched
+# failing with the description partial left above the H1 in the
+# template: the lede-below-H1 comparison fired on this page.
+relay = read("alpha/runbooks/relay-restart/index.html")
+if len(h1s(relay)) != 1 or "Restart the relay" not in h1s(relay)[0]:
+    fail(f"relay-restart's own H1 did not survive the lede split: {h1s(relay)}")
+if not relay.index("<h1") < relay.index("okf-description"):
+    fail("the document description renders above the H1; it is a lede, not a preamble")
+if not relay.index("okf-description") < relay.index("The arrow below is the whole point"):
+    fail("the document lede renders below the body; it belongs between the H1 and the first paragraph")
+
+# --- Subsection counts: recursive, and each plural agrees with its own
+# number. Same shape as the bundle-card counter above. `Deep` is the
+# entry that proves *recursive*: one direct page, one nested a level
+# below, so a direct count reads 1 and only `.RegularPagesRecursive`
+# reads 2. Watched failing with the template counting `.RegularPages`:
+# Deep said "1 page".
+counts = re.findall(r'<span class="okf-nav-count">(\d+) page(s?)</span>', nav)
+if any((count == "1") == bool(plural) for count, plural in counts):
+    fail(f"a subsection counter disagrees with its own plural: {counts}")
+expected_counts = {
+    "/alpha/mixed/deep/": "2 pages",     # 1 direct + 1 nested: recursion or bust
+    "/alpha/mixed/guides/": "2 pages",
+    "/alpha/mixed/spare/": "1 page",     # the singular
+    "/beta/notes/": "1 page",
+}
+for href, want in expected_counts.items():
+    page = read("beta/index.html") if href.startswith("/beta") else mixed
+    entry = re.search(
+        re.escape(f'href="{href}"') + r'.*?<span class="okf-nav-count">([^<]*)</span>',
+        page, re.S,
+    )
+    if not entry or entry.group(1) != want:
+        fail(f"the {href} entry counts {entry.group(1) if entry else 'nothing'}, not {want!r}")
+
+# --- A3, the fold, on both sides of both lines. 21 documents with prose
+# outside the markers folds behind its count; the same 21 with no prose
+# stays open, because a page whose listing is its whole content must not
+# collapse to one line; 20 or fewer never folds. Watched failing twice:
+# with the prose condition forced true (stream folded) and with the
+# threshold raised to 99 (bulk stopped folding).
+bulk_nav = nav_of(section_body(read("alpha/bulk/index.html"), "/alpha/bulk/"), "/alpha/bulk/")
+if '<details class="okf-fold">' not in bulk_nav or "<summary>21 documents</summary>" not in bulk_nav:
+    fail("21 documents beside tenant prose did not fold behind their count")
+stream_nav = nav_of(section_body(read("alpha/stream/index.html"), "/alpha/stream/"), "/alpha/stream/")
+if "<details" in stream_nav:
+    fail("a listing that is its page's only content folded; the page is now one line")
+# The lower side of the threshold, pinned where a fold can actually fire.
+# This assertion used to sit on runbooks, whose two entries have no tenant
+# prose outside the markers — so `$prose` blocked its fold at *any*
+# threshold and "the threshold is not holding" was a cause that could not
+# produce the failure: `$foldAt := 1` shipped fully green through it. The
+# mixed section is the fixture that works: its lead paragraph and closing
+# note make `$prose` true, so only the threshold decides, and its
+# 2-document and 3-section partitions fold the moment the line drops
+# below their sizes. Watched failing with `$foldAt := 1`: both partitions
+# folded behind their counts and this fired.
+mixed_nav = nav_of(section_body(read("alpha/mixed/index.html"), "/alpha/mixed/"), "/alpha/mixed/")
+if "<details" in mixed_nav:
+    fail("a small listing beside tenant prose folded; the fold threshold dropped below a screenful")
+# The line itself, from below. bulk's 21 pins only the top (a threshold
+# past 20 stops it folding) and mixed's 2 and 3 pin only the floor, so
+# any threshold from 4 to 19 used to ship green — folding the estate's
+# 12- and 13-entry listings that sit beside prose. The ledger holds 20
+# documents beside tenant prose: `gt` is strict, so at the claimed line
+# of 20 it stays open, and any lower line folds it. With bulk's 21 this
+# pins the fold to exactly 20. Watched failing on both sides: `$foldAt
+# := 19` folded the ledger, `$foldAt := 21` left bulk open.
+ledger_nav = nav_of(section_body(read("alpha/ledger/index.html"), "/alpha/ledger/"), "/alpha/ledger/")
+if "<details" in ledger_nav:
+    fail("20 documents beside tenant prose folded; the fold line dropped below the 20 the template claims")
+if len(entries(ledger_nav)) != 20:
+    fail(f"the ledger nav holds {len(entries(ledger_nav))} entries, not the 20 that sit on the fold line")
+# Every fold summary anywhere agrees with its own plural.
+for count, noun, plural in re.findall(r"<summary>(\d+) (document|section)(s?)</summary>", read("alpha/bulk/index.html")):
+    if (count == "1") == bool(plural):
+        fail(f"a fold summary disagrees with its own plural: {count} {noun}{plural}")
+
+# --- The hostile description inside the *built* nav. The card grid and
+# the term page prove the parking pass where the description is rendered
+# by the old paths; /alpha/archive/2026/ is now a replaced section whose
+# nav renders the same description, so the same proof applies there.
+unbroken(
+    read("alpha/archive/2026/index.html"),
+    "replaced section's built nav",
+    ["/alpha/archive/2026/awkward-description/", "/alpha/archive/2026/plain-log/"],
+)
+
+# --- The nav's words stay out of the index. Two defences hold this:
+# Pagefind skips `<nav>` elements by default (measured: with only the
+# attribute removed, nothing leaked), and `data-pagefind-ignore` holds if
+# the element ever changes. This assertion guards the *property* — a
+# child's description must not become its parent's content — whichever
+# defence is on duty. Watched failing with the nav demoted to a `<div>`
+# and the attribute dropped: both fragments carried the strings.
+ignored_in = {
+    "/alpha/archive/2026/": "An ordinary description",   # plain-log's, via the nav
+    "/alpha/mixed/": "The lowercase half",               # implement's, via the nav
+}
+for path in glob.glob(f"{site}/public/pagefind/fragment/*.pf_fragment"):
+    body = gzip.open(path).read().decode("utf-8", "replace")
+    fragment = json.loads(body.split("pagefind_dcd", 1)[1])
+    needle = ignored_in.get(fragment["url"])
+    if needle and needle in fragment["content"]:
+        fail(f"{fragment['url']} indexes its own nav's child descriptions ({needle!r})")
+
+# ---- A2: one search partial per page, tucked off the root. ------------
+# `index.html` mounts the open box on the home page; `baseof.html` mounts
+# the collapsed <details> behind `if not .IsHome`. Same predicate,
+# opposite polarity, so exactly one fires — and the id count is what
+# proves it, because `getElementById` wires only the first `okf-q` and a
+# duplicate is a search box that silently does nothing. Counted on every
+# generated page including the 404, not just the home page. Watched
+# failing with the baseof guard removed: the home page carried two.
+pages = sorted(glob.glob(f"{site}/public/**/*.html", recursive=True))
+if len(pages) < 30:
+    fail(f"only {len(pages)} generated pages; the fixture shrank out from under these assertions")
+for path in pages:
+    page = open(path, encoding="utf-8").read()
+    if page.count('id="okf-q"') != 1:
+        fail(f"{path} carries {page.count('id=\"okf-q\"')} search inputs, not exactly 1")
+    is_home = path == f"{site}/public/index.html"
+    if is_home:
+        if "okf-search-tuck" in page:
+            fail("the home page renders the tucked search; the root's is the open form")
+        if '<section class="okf-search"' not in page:
+            fail("the home page lost its open search box")
+    else:
+        tuck = re.search(r'<details class="okf-search okf-search-tuck"[^>]*>', page)
+        if not tuck:
+            fail(f"{path} renders no tucked search in its header")
+        if re.search(r"\bopen\b", tuck.group(0)):
+            fail(f"{path}'s search tuck ships open; collapsed is the point of the tuck")
+        header = re.search(r'<header class="okf-header">.*?</header>', page, re.S)
+        if not header or "okf-search-tuck" not in header.group(0):
+            fail(f"{path}'s search tuck is not inside the header row")
+        if not re.search(r'<div id="okf-filters"[^>]*\shidden', page):
+            fail(f"{path}'s filter row is not hidden; with no index it renders empty selects")
+
+# The search chrome's words stay out of the index: both forms carry
+# `data-pagefind-ignore`, and the fixture prose deliberately never says
+# "Kind" or "Clear", so any fragment containing either as a word indexed
+# the controls. The tucked form sits inside `<header>`, which Pagefind
+# also skips by default; the root's `<section>` has no such cover, and
+# that is where the attribute is load-bearing. Watched failing with the
+# attribute dropped from the root form: the "/" fragment read
+# "Fixture tenant. any any Clear".
+for path in glob.glob(f"{site}/public/pagefind/fragment/*.pf_fragment"):
+    body = gzip.open(path).read().decode("utf-8", "replace")
+    fragment = json.loads(body.split("pagefind_dcd", 1)[1])
+    for chrome in ("Kind", "Clear"):
+        if re.search(rf"\b{chrome}\b", fragment["content"]):
+            fail(f"{fragment['url']} indexes the search chrome ({chrome!r}); the partial lost data-pagefind-ignore")
+
+# ---- A7: sibling navigation at a leaf. --------------------------------
+# One estate-wide sweep, because the properties are invariants: at most
+# one sibling nav per page, exactly one `aria-current` marker inside it,
+# never a self-link, and every href resolves to a page Hugo actually
+# published — the `no_index_under` shape is exactly where a naive
+# directory listing would emit dead links. Watched failing three ways:
+# the current-page span turned back into an anchor (self-link), a
+# suffix appended to sibling hrefs (dead link), and the marker span
+# removed (no aria-current).
+for path in pages:
+    page = open(path, encoding="utf-8").read()
+    navs = re.findall(r'<nav class="okf-siblings".*?</nav>', page, re.S)
+    if len(navs) > 1:
+        fail(f"{path} renders {len(navs)} sibling navs")
+    if not navs:
+        continue
+    nav = navs[0]
+    own = "/" + path[len(f"{site}/public/") :].removesuffix("index.html")
+    if "data-pagefind-ignore" not in nav:
+        fail(f"{path}'s sibling nav is not data-pagefind-ignore'd")
+    if nav.count('aria-current="page"') != 1:
+        fail(f"{path}'s sibling nav marks {nav.count('aria-current=\"page\"')} current pages, not exactly 1")
+    hrefs = re.findall(r'href="([^"]*)"', nav)
+    if own in hrefs:
+        fail(f"{path} links to itself from its own sibling nav")
+    for href in hrefs:
+        if not glob.os.path.isfile(f"{site}/public{href}index.html"):
+            fail(f"{path}'s sibling nav links {href}, which Hugo never published")
+
+# The roll-up at a section-less directory: `loose/` has no index.md, so
+# Hugo builds no section for it and its notes attach to /alpha/ — the
+# sibling list must therefore reach *outside* the directory (untyped.md
+# is alpha's own page), and the "In" heading must link the section that
+# actually has a page. Watched failing with the sibling list truncated
+# to its first two entries: untyped fell out and only this noticed.
+stray = read("alpha/loose/stray-note/index.html")
+nav = re.search(r'<nav class="okf-siblings".*?</nav>', stray, re.S)
+if not nav:
+    fail("the stray note under a section-less directory renders no sibling nav")
+nav = nav.group(0)
+for sib in ("/alpha/untyped/", "/alpha/loose/second-note/"):
+    if f'href="{sib}"' not in nav:
+        fail(f"the stray note's siblings omit {sib}; the roll-up to the parent section broke")
+if '<h2 class="okf-sib-heading">In <a href="/alpha/">' not in nav:
+    fail("the stray note's section heading does not link /alpha/, the nearest section with a page")
+
+def sibling_nav(page, where):
+    """The sibling nav, or the authored failure rather than a traceback.
+
+    The assertions below used to chain `.group(0)` onto this search (and
+    onto the sibling-list search inside it), so a page that lost its
+    sibling nav raised AttributeError instead of the message each
+    assertion was written to give. Never a false green — but the message
+    is the point, and a traceback names re instead of the nav.
+    """
+    match = re.search(r'<nav class="okf-siblings".*?</nav>', page, re.S)
+    if not match:
+        fail(f"{where} renders no sibling nav; a leaf with siblings lost its way out")
+    return match.group(0)
+
+
+# The order is RelPermalink-ascending, not filename bytes, not title,
+# and not Hugo's default: `PLANS.md` sorts before `implement.md` in
+# bytes, and its title `ExecPlan` sorts before `Implement`, so the pair
+# inverts under every candidate key except the permalink — including the
+# bare `.RegularPages` default, which on this dateless, weightless
+# corpus collapses to title order. Previous/Next walk the same order.
+# Watched failing three ways: the sort key flipped descending (plans
+# listed first and implement's rel="next" pointed nowhere), the key
+# swapped to "Title", and the sort removed entirely.
+imp = read("alpha/mixed/implement/index.html")
+nav = sibling_nav(imp, "/alpha/mixed/implement/")
+siblist = re.search(r'<ul class="okf-listing okf-sib-list">.*?</ul>', nav, re.S)
+if not siblist:
+    fail("/alpha/mixed/implement/'s sibling nav holds no sibling list; the order below has nothing to check")
+siblist = siblist.group(0)
+if not siblist.index("okf-sib-here") < siblist.index('href="/alpha/mixed/plans/"'):
+    fail("implement does not precede plans in the sibling list; the order is not RelPermalink-ascending")
+if 'rel="prev"' in nav:
+    fail("the first sibling has a Previous link; the order is not RelPermalink-ascending")
+if '<a rel="next" href="/alpha/mixed/plans/">' not in nav:
+    fail("implement's Next is not plans; Previous/Next do not walk RelPermalink order")
+plans = read("alpha/mixed/plans/index.html")
+if '<a rel="prev" href="/alpha/mixed/implement/">' not in plans:
+    fail("plans' Previous is not implement; Previous/Next do not walk RelPermalink order")
+entry05 = read("alpha/bulk/entry-05/index.html")
+if ('rel="prev" href="/alpha/bulk/entry-04/"' not in entry05
+        or 'rel="next" href="/alpha/bulk/entry-06/"' not in entry05):
+    fail("entry-05's Previous/Next are not entries 04 and 06; the step order broke")
+
+# The sibling fold shares list.html's 20-entry line: 21 siblings fold
+# behind "21 documents", 2 stay open. Watched failing with the sibling
+# threshold raised: the bulk leaf's list stopped folding.
+nav = sibling_nav(entry05, "/alpha/bulk/entry-05/")
+if '<details class="okf-fold">' not in nav or "<summary>21 documents</summary>" not in nav:
+    fail("21 siblings did not fold behind their count at a leaf")
+quiet = read("alpha/runbooks/quiet-page/index.html")
+nav = sibling_nav(quiet, "/alpha/runbooks/quiet-page/")
+if "<details" in nav:
+    fail("a two-sibling list folded at a leaf")
+# And the sibling fold's own lower edge, which the two-sibling page pins
+# only at the floor: a ledger row has exactly 20 siblings, the strict
+# `gt` keeps them open at the claimed line, and any lower line folds
+# them. With bulk's 21 this pins the sibling fold to exactly 20 as well.
+# Watched failing on both sides: the threshold at 19 folded a ledger
+# row's siblings, at 21 the bulk leaf's list stopped folding.
+row = read("alpha/ledger/row-07/index.html")
+nav = sibling_nav(row, "/alpha/ledger/row-07/")
+if "<details" in nav:
+    fail("20 siblings folded at a leaf; the sibling fold line dropped below the 20 the template claims")
+if nav.count("<li") != 20:
+    fail(f"a ledger row's sibling list holds {nav.count('<li')} items, not the 20 that sit on the fold line")
+
+# Fewer than two siblings renders no nav at all: a sibling list of one
+# is the page itself. Watched failing with the guard lowered to one.
+for path in ("alpha/decisions/0001-pick-a-thing/index.html", "beta/notes/shared-decision/index.html"):
+    if "okf-siblings" in read(path):
+        fail(f"{path} renders a sibling nav for a page with nothing to step to")
+
+print(
+    f"the navigation pass holds: {len(replaced)} replaced sections match "
+    "their blocks, 2 divergent sections keep them verbatim, every crumb "
+    "agrees with its H1, both folds fire past 20 and stay open at 20, one "
+    f"search mount per page over {len(pages)} pages, and every sibling "
+    "href resolves"
+)

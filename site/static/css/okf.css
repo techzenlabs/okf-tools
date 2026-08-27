@@ -124,6 +124,55 @@ h1, h2, h3 { line-height: 1.25; }
   font-weight: 600;
 }
 
+/* ---- Section navigation and the demoted list-page description ----------
+   Everything from here to the closing marker belongs to `list.html`'s
+   section navigation; keep additions to it inside this block.
+
+   The description used to render above the H1, where it read as an orphan
+   grey paragraph introducing nothing. It now renders directly under the
+   title as a lede, so it is pulled up against the H1's bottom margin and
+   sized between the heading and the body text. One demotion, both
+   templates: `.okf-section` is `list.html` and `.okf-page` is
+   `single.html`, where the same orphan read worst — a third of gill's
+   described documents open with a description that is a prefix of their
+   own first paragraph. Duplication is not suppressed there — the call on
+   that is in `single.html`'s header comment. */
+.okf-section > .okf-description,
+.okf-page > .okf-description {
+  margin: -0.4rem 0 1.4rem;
+  font-size: 0.95rem;
+}
+
+.okf-nav { margin: 1rem 0; }
+
+/* okf-index writes `## Sections` between the documents and the
+   subsections; the built navigation keeps the same partition, so the
+   heading matches the body-text scale rather than shouting over it. */
+.okf-nav-heading { font-size: 1rem; margin: 1.4rem 0 0.5rem; }
+
+/* The recursive page count beside a subsection link is the one number that
+   tells an 820-page archive from a 5-page template shelf. Muted and
+   tabular, the same voice as the bundle cards' counter. */
+.okf-nav-count {
+  margin-inline-start: 0.35rem;
+  color: var(--okf-muted);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* A folded partition: the summary line carries the count, so the fold is a
+   promise of what is inside rather than a mystery-meat toggle. */
+.okf-fold summary {
+  cursor: pointer;
+  color: var(--okf-link);
+  font-size: 0.9rem;
+  padding: 0.2rem 0;
+}
+
+.okf-fold[open] summary { margin-block-end: 0.3rem; }
+/* ---- end section navigation ------------------------------------------- */
+
 .okf-search input {
   width: 100%;
   padding: 0.5rem;
@@ -170,6 +219,104 @@ h1, h2, h3 { line-height: 1.25; }
 }
 
 .okf-tally[hidden] { display: none; }
+
+/* ---- Search off the root: the header tuck (A2) -----------------------
+   Everything from here to the closing marker belongs to the collapsed
+   <details> form of `okf-search.html`, mounted in the header row by
+   `baseof.html` on every page but the home page. Keep additions to it
+   inside this block.
+
+   Collapsed, it is one link-coloured word at the right end of the header
+   line: chrome beside chrome, nothing above the H1, and the filter row the
+   script unhides on load stays invisible inside the closed fold. Open, it
+   takes a full-width row of the same bordered header strip — box, filters
+   and results all inside the strip, pushing the document down only after
+   the reader asked for it. The wrap is what makes both states share one
+   flex container. */
+.okf-header { flex-wrap: wrap; }
+
+.okf-search-tuck {
+  margin-inline-start: auto;
+  font-size: 0.9rem;
+}
+
+.okf-search-tuck summary {
+  cursor: pointer;
+  color: var(--okf-link);
+}
+
+.okf-search-tuck[open] {
+  flex-basis: 100%;
+  margin-inline-start: 0;
+}
+
+.okf-search-tuck[open] summary { margin-block-end: 0.4rem; }
+
+/* The tuck's results reuse `.okf-listing`, which is unpadded inside the
+   strip; give them their own breathing room and a cap so a 300-hit search
+   scrolls inside the strip rather than becoming the page. */
+.okf-search-tuck .okf-listing {
+  margin: 0.6rem 0 0.4rem;
+  padding-inline-start: 1.2rem;
+  max-height: 24rem;
+  overflow-y: auto;
+}
+/* ---- end header tuck -------------------------------------------------- */
+
+/* ---- Sibling navigation at a leaf (A7) ---------------------------------
+   Everything from here to the closing marker belongs to `single.html`'s
+   sibling navigation; keep additions to it inside this block. Two other
+   owned blocks exist above (section navigation, header tuck) — this one
+   reuses their `.okf-fold` and `.okf-listing` without restyling them.
+
+   The nav sits at the foot of the document behind the same hairline the
+   footer uses, one size down from body text: it is the way out of the
+   page, not part of the page. Previous and Next are a two-ended row —
+   each link stacks a muted direction word over the destination's title,
+   and a lone Next keeps its right-hand end so the step direction reads
+   from position as well as label. */
+.okf-siblings {
+  margin-block-start: 3rem;
+  border-block-start: 1px solid var(--okf-rule);
+  padding-block-start: 0.9rem;
+  font-size: 0.9rem;
+}
+
+.okf-sib-step {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.okf-sib-step a {
+  max-width: 48%;
+  text-decoration: none;
+}
+
+.okf-sib-step a[rel="next"] {
+  margin-inline-start: auto;
+  text-align: end;
+}
+
+.okf-sib-dir {
+  display: block;
+  color: var(--okf-muted);
+  font-size: 0.8rem;
+}
+
+/* "In <section>" labels the list and is the reader's way up when the
+   breadcrumb is a page-height away; body-text scale, same as the section
+   template's own partition heading. */
+.okf-sib-heading {
+  font-size: 1rem;
+  margin: 1.2rem 0 0.4rem;
+}
+
+.okf-sib-list { margin-block: 0.2rem; }
+
+/* The current page in its own sibling list: marked, never a self-link. */
+.okf-sib-here { font-weight: 600; }
+/* ---- end sibling navigation -------------------------------------------- */
 
 /* One card per bundle, and the whole front door. Two columns where there is
    room and one where there is not; a single-bundle tenant gets one card and

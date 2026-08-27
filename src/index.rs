@@ -37,7 +37,7 @@ pub(crate) static PARA_SPLIT: LazyLock<Regex> = LazyLock::new(|| compiled(r"\n\s
 pub(crate) static MD_LINK: LazyLock<Regex> = LazyLock::new(|| compiled(r"\[([^\]]+)\]\([^)]*\)"));
 static ROOT_FM_GREEDY_NL: LazyLock<Regex> = LazyLock::new(|| compiled(r"(?s)^---\n.*?\n---\n+"));
 static ROOT_FM_ONE_NL: LazyLock<Regex> = LazyLock::new(|| compiled(r"(?s)^---\n.*?\n---\n"));
-static MONTH_PREFIX: LazyLock<Regex> = LazyLock::new(|| compiled(r"^\d{4}-\d{2}"));
+static MONTH_PREFIX: LazyLock<Regex> = LazyLock::new(|| compiled(r"^(\d{4})-?(\d{2})"));
 
 /// A bare address in a quoted description lints as an error in the listing;
 /// the angle-bracket form is the markdown spelling of the same text.
@@ -295,11 +295,64 @@ fn entries_for(dir: &Path, root: &Path, config: &Config, mirrors: &[(String, Reg
         }
         lines.push("## Sections\n".to_owned());
         for sub in &subdirs {
-            let (title, desc) = dir_label(sub);
-            lines.push(entry(&title, &format!("{}/", dir_name(sub)), &desc));
+            if in_bundle(sub, root, config) {
+                let (title, desc) = dir_label(sub);
+                lines.push(entry(&title, &format!("{}/", dir_name(sub)), &desc));
+            } else {
+                lines.extend(inlined_group(sub, root, config, mirrors));
+            }
         }
     }
     finish(&lines)
+}
+
+/// A subdirectory `no_index_under` keeps indexless, listed without a link.
+///
+/// No index means no published page, so a `name/` link here is a link the
+/// tool *knows* will 404 — which is how gill's three `plans/` children came
+/// to dangle while the eleven documents under them went unlinked. The group
+/// stays visible as an unlinked name, and its contents are nested under it:
+/// documents first, then any deeper directory that does get an index. This
+/// is the plain-listing twin of the month-grouped path, which for the same
+/// reason links a summary document rather than the folder.
+fn inlined_group(
+    sub: &Path,
+    root: &Path,
+    config: &Config,
+    mirrors: &[(String, Regex)],
+) -> Vec<String> {
+    let name = dir_name(sub);
+    let mut lines = vec![format!("* {name}")];
+    for doc in direct_documents(sub, config) {
+        let (title, desc) = label(&doc, root, mirrors);
+        lines.push(indent(&entry(&title, &format!("{name}/{}", file_name(&doc)), &desc)));
+    }
+    for child in walk::children(sub, &config.paths.skip_names) {
+        if child.is_dir() && in_bundle(&child, root, config) {
+            let (title, desc) = dir_label(&child);
+            let target = format!("{name}/{}/", dir_name(&child));
+            lines.push(indent(&entry(&title, &target, &desc)));
+        }
+    }
+    lines
+}
+
+/// The markdown documents directly in `dir` that a listing may cite.
+fn direct_documents(dir: &Path, config: &Config) -> Vec<PathBuf> {
+    walk::children(dir, &config.paths.skip_names)
+        .into_iter()
+        .filter(|child| {
+            !child.is_dir()
+                && child
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| is_markdown(n) && n != "index.md" && n != "log.md")
+        })
+        .collect()
+}
+
+fn indent(line: &str) -> String {
+    format!("  {line}")
 }
 
 /// A chronological stream, grouped by month so the listing stays navigable at
@@ -313,11 +366,7 @@ fn month_grouped(
     let mut by_month: BTreeMap<String, Vec<&PathBuf>> = BTreeMap::new();
     for sub in subdirs {
         let name = dir_name(sub);
-        let month = if MONTH_PREFIX.is_match(&name) {
-            name.chars().take(7).collect()
-        } else {
-            "undated".to_owned()
-        };
+        let month = month_of(&name).unwrap_or_else(|| "undated".to_owned());
         by_month.entry(month).or_default().push(sub);
     }
 
@@ -332,13 +381,52 @@ fn month_grouped(
                 lines.push(entry(&title, &rel, &desc));
             }
             if summaries.is_empty() {
-                let name = dir_name(sub);
-                lines.push(entry(&name, &format!("{name}/"), ""));
+                lines.extend(month_fallback(sub, root, config, mirrors));
             }
         }
         lines.push(String::new());
     }
     finish(&lines)
+}
+
+/// The `YYYY-MM` grouping key of a directory name, dashed or not.
+///
+/// Estates spell dated names both ways — `2026-08-24-topic` and
+/// `20260310-topic` — and both must file under the month they carry, or
+/// enabling `group_by_month` on an undashed archive would file every entry
+/// under `undated`.
+fn month_of(name: &str) -> Option<String> {
+    MONTH_PREFIX
+        .captures(name)
+        .map(|c| format!("{}-{}", &c[1], &c[2]))
+}
+
+/// The entry for a month-grouped child with no matching summary document.
+///
+/// When the child still gets an index of its own, the folder link is a real
+/// page and stands. When `no_index_under` keeps it indexless there is no page
+/// to link, so its documents are listed instead — and a child with no direct
+/// documents at all is named without a link rather than linked to a 404.
+fn month_fallback(
+    sub: &Path,
+    root: &Path,
+    config: &Config,
+    mirrors: &[(String, Regex)],
+) -> Vec<String> {
+    let name = dir_name(sub);
+    if in_bundle(sub, root, config) {
+        return vec![entry(&name, &format!("{name}/"), "")];
+    }
+    let docs = direct_documents(sub, config);
+    if docs.is_empty() {
+        return vec![format!("* {name}")];
+    }
+    docs.iter()
+        .map(|doc| {
+            let (title, desc) = label(doc, root, mirrors);
+            entry(&title, &format!("{name}/{}", file_name(doc)), &desc)
+        })
+        .collect()
 }
 
 fn entry(title: &str, target: &str, desc: &str) -> String {
@@ -464,7 +552,90 @@ mod tests {
         assert!(ROOT_FM_GREEDY_NL.is_match("---\na: b\n---\n\n"));
         assert!(ROOT_FM_ONE_NL.is_match("---\na: b\n---\n"));
         assert!(MONTH_PREFIX.is_match("2026-08-24-topic"));
+        assert!(MONTH_PREFIX.is_match("20260310-clippy-cleanup"));
         assert!(BARE_EMAIL.is_match("a@b.com").unwrap_or(false));
+    }
+
+    /// Both spellings of a dated directory carry a month; the key is the
+    /// same dashed form for either, so one stream groups as one stream.
+    #[test]
+    fn month_keys_accept_dashed_and_undashed_date_prefixes() {
+        assert_eq!(month_of("2026-08-24-topic").as_deref(), Some("2026-08"));
+        assert_eq!(
+            month_of("20260310-clippy-cleanup").as_deref(),
+            Some("2026-03")
+        );
+        assert_eq!(month_of("notes"), None);
+        assert_eq!(month_of("20268-short"), None);
+    }
+
+    /// The gill `plans/` shape: `no_index_under` names a directory that is
+    /// not month-grouped. No index will be written under it, so no page will
+    /// exist — the parent listing must not link the child directory, and the
+    /// documents inside must stay reachable through the listing instead.
+    #[test]
+    fn an_indexless_child_is_listed_by_its_documents_not_by_a_dangling_link() {
+        let root = std::env::temp_dir().join(format!(
+            "okf-index-noindex-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::create_dir_all(root.join("plans/active"));
+        let _ = std::fs::write(
+            root.join("plans/active/roadmap.md"),
+            "---\ntitle: Roadmap\ndescription: Where this goes.\n---\n\n# Roadmap\n",
+        );
+        let mut config = Config::default();
+        config.index.no_index_under = vec!["plans".to_owned()];
+
+        let outcome = run(&root, &config, false).unwrap_or_default();
+        // The root and `plans` get indexes; `plans/active` gets none.
+        assert_eq!(outcome.directories, 2);
+        assert!(!root.join("plans/active/index.md").exists());
+
+        let plans = walk::read_lossy(&root.join("plans/index.md"));
+        assert!(!plans.contains("](active/)"), "{plans}");
+        assert!(plans.contains("* active"), "{plans}");
+        assert!(
+            plans.contains("  * [Roadmap](active/roadmap.md) - Where this goes."),
+            "{plans}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The gill `execution/archive` shape: month grouping over undashed
+    /// folders that keep their own indexes and hold nothing the
+    /// `month_entry_glob` matches. The fallback folder link points at a page
+    /// that will exist, so it stands.
+    #[test]
+    fn a_grouped_child_with_its_own_index_keeps_the_folder_link() {
+        let root = std::env::temp_dir().join(format!(
+            "okf-index-grouped-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::create_dir_all(root.join("archive/20260310-clippy-cleanup"));
+        let _ = std::fs::write(
+            root.join("archive/20260310-clippy-cleanup/issue.md"),
+            "---\ntitle: Clippy cleanup\n---\n\n# Clippy cleanup\n",
+        );
+        let mut config = Config::default();
+        config.index.group_by_month = vec!["archive".to_owned()];
+
+        let _ = run(&root, &config, false).unwrap_or_default();
+        assert!(root.join("archive/20260310-clippy-cleanup/index.md").exists());
+
+        let archive = walk::read_lossy(&root.join("archive/index.md"));
+        assert!(archive.contains("## 2026-03\n"), "{archive}");
+        assert!(
+            archive.contains("* [20260310-clippy-cleanup](20260310-clippy-cleanup/)"),
+            "{archive}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

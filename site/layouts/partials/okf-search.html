@@ -3,9 +3,10 @@
   site.
 
   This is a partial rather than a block in `index.html` because it stopped
-  being the root page's private business the day "By kind" moved into it.
-  Mounting it on every page is one call in `baseof.html`; that is a separate
-  decision and this is what makes it a one-line one.
+  being the root page's private business the day "By kind" moved into it. It
+  now mounts on every page: `index.html` renders the open form on the root,
+  `baseof.html` renders the tucked form everywhere else — see TWO
+  PRESENTATIONS below for why that pair is exclusive by construction.
 
   WHY THE FILTERS REPLACED A LISTING. The root used to print every regular
   page grouped by `type`. On a 704-document tenant that is 705 list items,
@@ -30,10 +31,34 @@
   at all. The import throws there, and it must not take the page with it: the
   filter row stays hidden and the box keeps its own placeholder. The built
   site is where this works, and the fixture asserts it there.
+
+  TWO PRESENTATIONS, ONE MOUNT PER PAGE. On the front door the search box is
+  the page, so the root gets the open box between its prose and the bundle
+  cards. Everywhere else it is a tool beside a document, so it renders as a
+  collapsed <details> in the header row: one word of chrome until a reader
+  wants it, and the filter row — which the script unhides the moment Pagefind
+  fills it — stays out of sight inside the closed fold instead of sprouting a
+  Kind/Trust strip above every H1 in the estate. The script below is
+  byte-identical in both presentations and binds fixed DOM ids, so this
+  partial must render at most once per page. That exclusivity is structural,
+  not policed here: `index.html` is Hugo's home-page template and mounts the
+  open form, `baseof.html` mounts the tucked form behind `if not .IsHome`,
+  and the two conditions are the same predicate in opposite polarity. Anyone
+  adding a third call site owns the duplicate-id breakage.
+
+  `data-pagefind-ignore` on both forms: a search UI is chrome, not content,
+  and unignored it would put "Search", "Kind" and "Clear" into every
+  document's index — the same class of pollution the facets block and the
+  bundle cards already guard against.
 */ -}}
-<section class="okf-search">
+{{- if .IsHome }}
+<section class="okf-search" data-pagefind-ignore>
   <label for="okf-q">Search</label>
-  <input id="okf-q" type="search" autocomplete="off" placeholder="search this site" />
+{{- else }}
+<details class="okf-search okf-search-tuck" data-pagefind-ignore>
+  <summary>Search</summary>
+{{- end }}
+  <input id="okf-q" type="search" autocomplete="off" placeholder="search this site"{{ if not .IsHome }} aria-label="Search this site"{{ end }} />
   <div id="okf-filters" class="okf-filters" hidden>
     <span class="okf-filter">
       <label for="okf-f-type">Kind</label>
@@ -47,7 +72,11 @@
   </div>
   <p id="okf-tally" class="okf-tally" hidden></p>
   <ul id="okf-results" class="okf-listing"></ul>
+{{- if .IsHome }}
 </section>
+{{- else }}
+</details>
+{{- end }}
 
 <script type="module">
   const box = document.getElementById("okf-q");

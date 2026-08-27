@@ -205,11 +205,16 @@ fn listings_group_by_month_suppress_drop_folders_and_run_deepest_first() {
     let flows = meetings.find("summary-flows.md");
     let plain = meetings.find("2026-01-20-beta/summary.md");
     assert!(flows < plain && flows.is_some(), "{meetings}");
-    // A folder holding markdown but no summary falls back to a folder link.
+    // A folder holding markdown but no summary is indexless here
+    // (`no_index_under`), so a folder link would point at a page that will
+    // never exist: its documents are listed in its place.
     assert!(
-        meetings.contains("* [2026-02-03-gamma](2026-02-03-gamma/)"),
+        meetings.contains(
+            "* [Gamma notes](2026-02-03-gamma/notes.md) - Markdown present, but no summary file."
+        ),
         "{meetings}"
     );
+    assert!(!meetings.contains("(2026-02-03-gamma/)"), "{meetings}");
 
     // A drop folder lists nothing, and its block collapses rather than
     // leaving a run of blank lines behind.

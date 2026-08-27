@@ -41,6 +41,18 @@
   <body>
     <header class="okf-header">
       <a class="okf-home" href="{{ "/" | relURL }}">{{ site.Title }}</a>
+      {{- /* Search off the root: the collapsed form of the same partial the
+             root mounts open. The guard is load-bearing, not defensive: the
+             partial binds fixed DOM ids, so it must render exactly once per
+             page. `index.html` is Hugo's home-page template — it renders the
+             home page and nothing else — and this call is its exact
+             complement, so exactly one of the two fires for every page.
+             Removing either condition gives the home page two search boxes,
+             of which `getElementById` would wire only the first (measured:
+             dropping the guard put two `id="okf-q"` on the built root). */}}
+      {{- if not .IsHome }}
+      {{ partial "okf-search.html" . }}
+      {{- end }}
     </header>
     {{- /* A second quiet line under the header, not a fight for the header
            row: seven levels deep the trail wraps, and wrapping is fine. */}}
