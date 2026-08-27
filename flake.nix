@@ -83,6 +83,28 @@
         # before it was believed, and each builds by name:
         # `nix build .#checks.<system>.<name>`.
         siteChecks = let
+          # The fixture tenant's pins, written out rather than read from
+          # fixtures/site/tenant/site.toml: the rev beside a source is the
+          # *claim* okf-assemble --pinned verifies against the manifest, and
+          # deriving the claim from the manifest would compare the file with
+          # itself and could never fail. A real tenant's claim comes from the
+          # generated nix/bundles.nix the same way — a second place that can
+          # drift, which is exactly what the verification is for.
+          alphaRev = "1111111111111111111111111111111111111111";
+          betaRev = "2222222222222222222222222222222222222222";
+          # The actual build script of a packages.site derivation over the
+          # fixture tenant, extracted so site-must-fail can run it against
+          # broken sources and watch it refuse. Because it is the produced
+          # script and not a copy of the steps, a step deleted from
+          # nix/site.nix disappears from what site-must-fail executes, the
+          # broken build goes green, and the check goes red the same day.
+          siteBuildScript = sources:
+            (import ./nix/site.nix {
+              inherit pkgs;
+              okf = okf-tools;
+              manifestDir = ./fixtures/site/tenant;
+              inherit sources;
+            }).buildCommand;
           mkCheck = name: script: extra:
             pkgs.runCommand name ({
                 nativeBuildInputs = [
@@ -110,6 +132,101 @@
           scan-negative-control =
             mkCheck "scan-negative-control" ./nix/checks/scan-negative-control.sh {};
           layout-fork = mkCheck "layout-fork" ./nix/checks/layout-fork.sh {};
+          bundles-current =
+            mkCheck "bundles-current" ./nix/checks/bundles-current.sh {};
+          # `packages.site` for the synthetic two-bundle tenant, built by the
+          # same nix/site.nix a real tenant's flake-module import uses — only
+          # the sources differ (fixture directories here, `builtins.fetchGit`
+          # over the generated nix/bundles.nix there), so the derivation a
+          # tenant ships is the one exercised here. Building it runs all five
+          # pipeline steps in the sandbox; the assertions then hold the
+          # output to the okfSite contract: $SITE is the served root itself.
+          packages-site =
+            pkgs.runCommand "packages-site" {
+              SITE = import ./nix/site.nix {
+                inherit pkgs;
+                okf = okf-tools;
+                manifestDir = ./fixtures/site/tenant;
+                sources = {
+                  alpha = {
+                    outPath = ./fixtures/site/alpha;
+                    rev = alphaRev;
+                  };
+                  beta = {
+                    outPath = ./fixtures/site/beta;
+                    rev = betaRev;
+                  };
+                };
+              };
+            } ''
+              fail() {
+                echo "FAIL: $*" >&2
+                exit 1
+              }
+              test -f "$SITE/index.html" || fail "the site root has no index.html"
+              test -f "$SITE/404.html" || fail "the site has no 404 page"
+              test -f "$SITE/build-lock.json" || fail "no build provenance was published"
+              test -d "$SITE/pagefind" || fail "pagefind wrote no search index"
+              test -f "$SITE/alpha/runbooks/relay-restart/index.html" ||
+                fail "a bundle page did not render"
+              # Sources verified at the manifest's own rev are the pinned
+              # corpus, and calling them a local override was the whole
+              # difference between the nix-built site and the CI-built one —
+              # 83 pages of footer stamp on techzen, and pagefind fragments
+              # proving the stamp sat inside indexed content. Nothing in a
+              # pinned build may carry it; -r covers the pagefind index too.
+              # The other direction — the stamp still firing for a genuine
+              # working-tree override — is site-pipeline's assertion.
+              if grep -rq "local build:" "$SITE"; then
+                grep -rl "local build:" "$SITE" >&2
+                fail "a verified pin was stamped as a local build"
+              fi
+              # The span, not the bare word: the stylesheet ships an
+              # `.okf-local` rule on every build, stamped or not.
+              if grep -rq 'class="okf-local"' "$SITE"; then
+                grep -rl 'class="okf-local"' "$SITE" | head >&2
+                fail "the local-build span reached a pinned build's pages"
+              fi
+              touch $out
+            '';
+          # The proof the pipeline's gates can still refuse: the same build
+          # script packages.site runs, over three broken fixture tenants,
+          # each asserted to fail at the right step for the right reason.
+          site-must-fail = mkCheck "site-must-fail" ./nix/checks/site-must-fail.sh {
+            PLANTED_SCRIPT = pkgs.writeText "planted-site-build" (siteBuildScript {
+              alpha = {
+                outPath = ./fixtures/site/alpha-planted;
+                rev = alphaRev;
+              };
+              beta = {
+                outPath = ./fixtures/site/beta;
+                rev = betaRev;
+              };
+            });
+            DRAFT_SCRIPT = pkgs.writeText "draft-site-build" (siteBuildScript {
+              alpha = {
+                outPath = ./fixtures/site/alpha-draft;
+                rev = alphaRev;
+              };
+              beta = {
+                outPath = ./fixtures/site/beta;
+                rev = betaRev;
+              };
+            });
+            DRIFT_SCRIPT = pkgs.writeText "drift-site-build" (siteBuildScript {
+              alpha = {
+                outPath = ./fixtures/site/alpha;
+                rev = "ffffffffffffffffffffffffffffffffffffffff";
+              };
+              beta = {
+                outPath = ./fixtures/site/beta;
+                rev = betaRev;
+              };
+            });
+            PLANTED_BUNDLE = ./fixtures/site/alpha-planted;
+            DRAFT_BUNDLE = ./fixtures/site/alpha-draft;
+            TENANT = ./fixtures/site/tenant;
+          };
           # This repository is public, so it scans itself.
           self-scan = mkCheck "self-scan" ./nix/checks/self-scan.sh {
             SOURCE = ./.;

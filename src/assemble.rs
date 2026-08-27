@@ -48,6 +48,26 @@ pub enum AssembleError {
          `--local {id}=<path>` has to name a bundle root that exists"
     )]
     LocalMissing { id: String, path: String },
+    #[error(
+        "bundle `{id}`: {path} is not a directory; \
+         `--pinned {id}=<path>@<rev>` has to name a bundle root that exists"
+    )]
+    PinnedMissing { id: String, path: String },
+    #[error(
+        "bundle `{id}`: the source handed to --pinned was fetched at {fetched}, \
+         but site.toml pins {pinned}. The fetch specification has drifted from \
+         the manifest; run `okf-assemble --bundles` and commit the diff"
+    )]
+    PinnedRevMismatch {
+        id: String,
+        fetched: String,
+        pinned: String,
+    },
+    #[error(
+        "bundle `{id}` is named by both --pinned and --local; a source is \
+         either the verified pin or a working-tree override, never both"
+    )]
+    PinnedAndLocal { id: String },
     #[error("bundle `{id}`: subdir `{subdir}` is not in the fetched tree at {rev}")]
     SubdirMissing {
         id: String,
@@ -62,6 +82,8 @@ pub enum AssembleError {
     NoMermaid,
     #[error("--local names bundle `{id}`, which is not in the manifest")]
     UnknownLocal { id: String },
+    #[error("--pinned names bundle `{id}`, which is not in the manifest")]
+    UnknownPinned { id: String },
     #[error("{}", collision_report(.0))]
     Collisions(Vec<(String, Collision)>),
     #[error(
@@ -103,6 +125,16 @@ fn io<E: Into<std::io::Error>>(context: impl Into<String>) -> impl FnOnce(E) -> 
     }
 }
 
+/// A source directory already at a known commit, offered in place of a fetch.
+#[derive(Debug, Clone)]
+pub struct Pinned {
+    /// The bundle repository root, typically a nix store path.
+    pub path: PathBuf,
+    /// The commit the caller fetched that path at. Compared against the
+    /// manifest's `rev`; a mismatch refuses the whole assembly.
+    pub rev: String,
+}
+
 /// Everything an assembly run needs beyond the manifest itself.
 pub struct Options {
     /// The site repository root. Every other path is relative to it.
@@ -112,6 +144,15 @@ pub struct Options {
     /// A local override is an argument and is never written to the manifest:
     /// when a working tree and the pinned `rev` disagree, the manifest wins.
     pub locals: BTreeMap<String, PathBuf>,
+    /// Sources already fetched at a claimed commit, standing in for the fetch.
+    ///
+    /// The claim is verified, not trusted: assembly refuses a source whose
+    /// rev is not the manifest's own pin. This is how a nix sandbox hands
+    /// over store paths it fetched at evaluation — the caller says what it
+    /// fetched, the manifest says what it pinned, and the build fails the
+    /// moment the two disagree. A verified pin is the pinned corpus, so it
+    /// is never stamped as a local override.
+    pub pinned: BTreeMap<String, Pinned>,
     /// Where `mermaid.min.js` is copied from.
     pub mermaid: Option<PathBuf>,
     /// Also write the assembled tree as one archive.
@@ -124,6 +165,7 @@ impl Options {
         Self {
             root,
             locals: BTreeMap::new(),
+            pinned: BTreeMap::new(),
             mermaid: None,
             tarball: false,
         }
@@ -145,6 +187,9 @@ pub struct Outcome {
     pub renamed: usize,
     pub rewritten: usize,
     pub local: Vec<String>,
+    /// Bundles assembled from a `--pinned` source whose rev matched the
+    /// manifest. Verified pins, never stamped.
+    pub pinned: Vec<String>,
 }
 
 /// Assemble the whole content tree from the manifest.
@@ -162,6 +207,14 @@ pub fn assemble(manifest: &Manifest, options: &Options) -> Result<Outcome, Assem
     for id in options.locals.keys() {
         if !manifest.bundles.iter().any(|b| b.id == *id) {
             return Err(AssembleError::UnknownLocal { id: id.clone() });
+        }
+    }
+    for id in options.pinned.keys() {
+        if !manifest.bundles.iter().any(|b| b.id == *id) {
+            return Err(AssembleError::UnknownPinned { id: id.clone() });
+        }
+        if options.locals.contains_key(id) {
+            return Err(AssembleError::PinnedAndLocal { id: id.clone() });
         }
     }
 
@@ -206,6 +259,10 @@ pub fn assemble(manifest: &Manifest, options: &Options) -> Result<Outcome, Assem
     write_root_index(manifest, &content)?;
     crate::sitegen::write_shared(&options.root)?;
     crate::sitegen::write_hugo_config(manifest, &options.root, &outcome.local)?;
+    // The nix fetch specification lands in the tree on every run, the way the
+    // justfile does, so a rolled pin reaches `nix/bundles.nix` in the same
+    // build that assembles it.
+    crate::sitegen::write_bundles_nix(manifest, &options.root)?;
     copy_mermaid(options)?;
     crate::sitegen::write_build_lock(manifest, &options.root)?;
     if options.tarball {
@@ -214,7 +271,8 @@ pub fn assemble(manifest: &Manifest, options: &Options) -> Result<Outcome, Assem
     Ok(outcome)
 }
 
-/// Where this bundle's files come from: a working tree, or a pinned fetch.
+/// Where this bundle's files come from: a working tree, a verified pinned
+/// source, or a pinned fetch.
 fn source_tree(
     bundle: &Bundle,
     options: &Options,
@@ -229,6 +287,29 @@ fn source_tree(
         }
         outcome.local.push(bundle.id.clone());
         return subdir_of(bundle, local);
+    }
+    if let Some(pinned) = options.pinned.get(&bundle.id) {
+        if !pinned.path.is_dir() {
+            return Err(AssembleError::PinnedMissing {
+                id: bundle.id.clone(),
+                path: pinned.path.display().to_string(),
+            });
+        }
+        // The whole point of --pinned over --local: the caller's claim is
+        // checked against the manifest, and a verified pin is *not* a local
+        // override, so nothing downstream stamps the pages. A rev that
+        // disagrees is a fetch specification that drifted from site.toml,
+        // and it fails the build here rather than shipping the wrong corpus
+        // under a lock file that claims the manifest's revs.
+        if pinned.rev != bundle.rev {
+            return Err(AssembleError::PinnedRevMismatch {
+                id: bundle.id.clone(),
+                fetched: pinned.rev.clone(),
+                pinned: bundle.rev.clone(),
+            });
+        }
+        outcome.pinned.push(bundle.id.clone());
+        return subdir_of(bundle, &pinned.path);
     }
     let work = options.work().join(&bundle.id);
     fetch(bundle, &work)?;

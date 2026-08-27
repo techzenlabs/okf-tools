@@ -3,10 +3,11 @@
 //! Usage:
 //!
 //! ```text
-//! okf-assemble [--tarball] [--local <id>=<path>]...
+//! okf-assemble [--tarball] [--local <id>=<path>]... [--pinned <id>=<path>@<rev>]...
 //! okf-assemble --update <id>
 //! okf-assemble --bootstrap [--tenant <name>] [--scan <dir>]
 //! okf-assemble --verify-raw
+//! okf-assemble --bundles [--check]
 //! ```
 
 use std::collections::BTreeMap;
@@ -18,13 +19,20 @@ use okf_tools::bootstrap;
 use okf_tools::manifest::{self, Manifest};
 use okf_tools::sitegen;
 
-const USAGE: &str = "usage: okf-assemble [--tarball] [--local <id>=<path>]...\n\
+const USAGE: &str = "usage: okf-assemble [--tarball] [--local <id>=<path>]... \
+     [--pinned <id>=<path>@<rev>]...\n\
      \x20      okf-assemble --update <id>\n\
      \x20      okf-assemble --bootstrap [--tenant <name>] [--scan <dir>]\n\
-     \x20      okf-assemble --verify-raw\n\n\
+     \x20      okf-assemble --verify-raw\n\
+     \x20      okf-assemble --bundles [--check]\n\n\
      Reads site.toml in the current directory and nothing else. --local points\n\
      one bundle at a working tree for this invocation only and is never\n\
-     written to the manifest.";
+     written to the manifest; the pages are stamped as a local build. --pinned\n\
+     hands over a source already fetched at <rev>: the rev is verified against\n\
+     the manifest's pin, a mismatch refuses the assembly, and a verified pin\n\
+     is not stamped. --bundles regenerates nix/bundles.nix from the manifest\n\
+     and fetches nothing; with --check it writes nothing and fails when the\n\
+     tracked file and the manifest disagree.";
 
 fn main() -> ExitCode {
     match run() {
@@ -36,21 +44,31 @@ fn main() -> ExitCode {
     }
 }
 
+/// What `--bundles` should do: regenerate the file, or assert it is current.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BundlesMode {
+    Write,
+    Check,
+}
+
 /// What the command line asked for.
 #[derive(Default)]
 struct Args {
     tarball: bool,
     verify_raw: bool,
     bootstrap: bool,
+    bundles: Option<BundlesMode>,
     update: Option<String>,
     tenant: Option<String>,
     scan: Option<PathBuf>,
     mermaid: Option<PathBuf>,
     locals: BTreeMap<String, PathBuf>,
+    pinned: BTreeMap<String, assemble::Pinned>,
 }
 
 fn parse() -> Result<Args, String> {
     let mut args = Args::default();
+    let mut check = false;
     let mut raw = std::env::args().skip(1);
     while let Some(arg) = raw.next() {
         let mut value = |name: &str| raw.next().ok_or_else(|| format!("{name} needs a value"));
@@ -58,6 +76,8 @@ fn parse() -> Result<Args, String> {
             "--tarball" => args.tarball = true,
             "--verify-raw" => args.verify_raw = true,
             "--bootstrap" => args.bootstrap = true,
+            "--bundles" => args.bundles = Some(BundlesMode::Write),
+            "--check" => check = true,
             "--update" => args.update = Some(value("--update")?),
             "--tenant" => args.tenant = Some(value("--tenant")?),
             "--scan" => args.scan = Some(PathBuf::from(value("--scan")?)),
@@ -69,8 +89,37 @@ fn parse() -> Result<Args, String> {
                     .ok_or_else(|| format!("--local wants <id>=<path>, not `{pair}`"))?;
                 args.locals.insert(id.to_owned(), PathBuf::from(path));
             }
+            "--pinned" => {
+                let triple = value("--pinned")?;
+                let (id, rest) = triple
+                    .split_once('=')
+                    .ok_or_else(|| format!("--pinned wants <id>=<path>@<rev>, not `{triple}`"))?;
+                // The *last* `@`, so a path holding one still parses; the rev
+                // is the fixed-shape half.
+                let (path, rev) = rest
+                    .rsplit_once('@')
+                    .ok_or_else(|| format!("--pinned wants <id>=<path>@<rev>, not `{triple}`"))?;
+                if !manifest::is_commit(rev) {
+                    return Err(format!(
+                        "--pinned {id}: `{rev}` is not a 40-character commit"
+                    ));
+                }
+                args.pinned.insert(
+                    id.to_owned(),
+                    assemble::Pinned {
+                        path: PathBuf::from(path),
+                        rev: rev.to_owned(),
+                    },
+                );
+            }
             other => return Err(format!("unrecognised argument `{other}`")),
         }
+    }
+    if check {
+        if args.bundles.is_none() {
+            return Err("--check belongs to --bundles".to_owned());
+        }
+        args.bundles = Some(BundlesMode::Check);
     }
     Ok(args)
 }
@@ -94,6 +143,11 @@ fn run() -> anyhow::Result<ExitCode> {
     }
 
     let manifest = Manifest::load(&manifest_path)?;
+
+    if let Some(mode) = args.bundles {
+        return run_bundles(&manifest, &root, mode == BundlesMode::Check);
+    }
+
     let allow = manifest::read_credentials_allow(&root.join("credentials.allow"))?;
     manifest.check_credentials(allow.as_ref())?;
 
@@ -103,6 +157,7 @@ fn run() -> anyhow::Result<ExitCode> {
 
     let mut options = Options::new(root);
     options.locals = args.locals;
+    options.pinned = args.pinned;
     options.mermaid = args.mermaid;
     options.tarball = args.tarball;
     let outcome = assemble::assemble(&manifest, &options)?;
@@ -115,6 +170,54 @@ fn run() -> anyhow::Result<ExitCode> {
         println!(
             "local build: {} — the manifest was not modified.",
             outcome.local.join(", ")
+        );
+    }
+    if !outcome.pinned.is_empty() {
+        println!(
+            "pinned source(s) verified against site.toml: {}.",
+            outcome.pinned.join(", ")
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Regenerate `nix/bundles.nix`, or with `check` assert it is current.
+///
+/// The check writes nothing and fetches nothing, which is what lets a
+/// derivation with no network run it against a tenant's tracked tree: the
+/// tree disagreeing with the tool that produced it is a reproducibility
+/// failure, and a hand-edited pin is exactly that.
+fn run_bundles(
+    manifest: &Manifest,
+    root: &std::path::Path,
+    check: bool,
+) -> anyhow::Result<ExitCode> {
+    if check {
+        let problems = sitegen::check_bundles_nix(manifest, root)?;
+        if problems.is_empty() {
+            println!("{} agrees with site.toml.", sitegen::BUNDLES_NIX_PATH);
+            return Ok(ExitCode::SUCCESS);
+        }
+        for problem in problems {
+            eprintln!("okf-assemble: {problem}");
+        }
+        return Ok(ExitCode::FAILURE);
+    }
+    sitegen::write_bundles_nix(manifest, root)?;
+    let opted_in = manifest
+        .bundles
+        .iter()
+        .filter(|b| !b.fetch.is_empty())
+        .count();
+    if opted_in == 0 {
+        println!(
+            "no bundle sets fetch; {} is not generated for this tenant.",
+            sitegen::BUNDLES_NIX_PATH
+        );
+    } else {
+        println!(
+            "wrote {} with {opted_in} bundle(s); commit the diff.",
+            sitegen::BUNDLES_NIX_PATH
         );
     }
     Ok(ExitCode::SUCCESS)

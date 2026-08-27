@@ -26,6 +26,17 @@ okf-assemble --verify-raw
 pagefind --site public > pagefind.log 2>&1
 cat pagefind.log
 
+# 0. The local-build stamp, positive direction. This pipeline runs `--local`,
+#    which is the stamp's real case: a working tree standing in for the pin
+#    on somebody's laptop must announce itself on every page. The other
+#    direction — a verified `--pinned` build carrying no stamp at all — is
+#    packages-site's assertion, so removing the stamp fails there and
+#    removing it only for locals fails here: the check can go red both ways.
+grep -q 'okf_local_bundles = \["alpha", "beta"\]' hugo.toml ||
+  fail "a --local build did not record the overridden bundles in hugo.toml"
+grep -q 'local build: alpha, beta' public/index.html ||
+  fail "a --local build did not stamp its pages"
+
 diagram="public/alpha/runbooks/relay-restart/index.html"
 quiet="public/alpha/runbooks/quiet-page/index.html"
 

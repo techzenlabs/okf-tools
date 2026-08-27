@@ -10,4 +10,4 @@ tree="$TMPDIR/tree"
 cp -r "$SOURCE" "$tree"
 chmod -R u+w "$tree"
 cd "$tree"
-okf-scan --exclude fixtures/scan-planted .
+okf-scan --exclude fixtures/scan-planted --exclude fixtures/site/alpha-planted .

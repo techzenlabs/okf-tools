@@ -159,6 +159,125 @@ fn a_credential_outside_the_allowlist_is_refused() {
     assert!(manifest.check_credentials(None).is_ok());
 }
 
+/// A `--pinned` source whose rev matches the manifest is the pinned corpus:
+/// assembled without a fetch, verified, and never stamped as a local build.
+#[test]
+fn a_pinned_source_at_the_manifest_rev_is_verified_and_not_stamped() {
+    let root = scratch("pinned-clean");
+    let manifest = Manifest::load(&fixture("site/tenant/site.toml")).unwrap_or_default();
+    let mut options = Options::new(root.clone());
+    options.pinned.insert(
+        "alpha".to_owned(),
+        assemble::Pinned {
+            path: fixture("site/alpha"),
+            rev: "1".repeat(40),
+        },
+    );
+    options.pinned.insert(
+        "beta".to_owned(),
+        assemble::Pinned {
+            path: fixture("site/beta"),
+            rev: "2".repeat(40),
+        },
+    );
+    options.mermaid = Some(fixture("site/tenant/site.toml"));
+    let outcome = assemble::assemble(&manifest, &options).unwrap_or_default();
+    assert_eq!(outcome.pinned, ["alpha", "beta"]);
+    assert!(outcome.local.is_empty());
+    // The stamp lives in the generated hugo.toml, and a verified pin must
+    // not carry it: the footer span and the pagefind index both follow from
+    // this one key.
+    let hugo = std::fs::read_to_string(root.join("hugo.toml")).unwrap_or_default();
+    assert!(
+        !hugo.contains("okf_local_bundles"),
+        "a verified pin was stamped as a local build:\n{hugo}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A `--pinned` source at any other rev is a drifted fetch specification and
+/// refuses the whole assembly, naming both commits.
+#[test]
+fn a_pinned_source_at_the_wrong_rev_refuses_the_assembly() {
+    let root = scratch("pinned-drift");
+    let manifest = Manifest::load(&fixture("site/tenant/site.toml")).unwrap_or_default();
+    let mut options = Options::new(root.clone());
+    options.pinned.insert(
+        "alpha".to_owned(),
+        assemble::Pinned {
+            path: fixture("site/alpha"),
+            rev: "f".repeat(40),
+        },
+    );
+    options.pinned.insert(
+        "beta".to_owned(),
+        assemble::Pinned {
+            path: fixture("site/beta"),
+            rev: "2".repeat(40),
+        },
+    );
+    options.mermaid = Some(fixture("site/tenant/site.toml"));
+    let err = match assemble::assemble(&manifest, &options) {
+        Ok(_) => String::new(),
+        Err(err) => err.to_string(),
+    };
+    assert!(err.contains(&"f".repeat(40)), "no fetched rev named: {err}");
+    assert!(err.contains(&"1".repeat(40)), "no pinned rev named: {err}");
+    assert!(
+        err.contains("okf-assemble --bundles"),
+        "no fix named: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// One bundle cannot be both the verified pin and a working-tree override.
+#[test]
+fn a_bundle_named_by_both_pinned_and_local_is_refused() {
+    let manifest = Manifest::load(&fixture("site/tenant/site.toml")).unwrap_or_default();
+    let root = scratch("pinned-and-local");
+    let mut options = Options::new(root.clone());
+    options
+        .locals
+        .insert("alpha".to_owned(), fixture("site/alpha"));
+    options.pinned.insert(
+        "alpha".to_owned(),
+        assemble::Pinned {
+            path: fixture("site/alpha"),
+            rev: "1".repeat(40),
+        },
+    );
+    let err = match assemble::assemble(&manifest, &options) {
+        Ok(_) => String::new(),
+        Err(err) => err.to_string(),
+    };
+    assert!(err.contains("both"), "not refused, or wrongly: {err}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// `--pinned` naming a bundle nobody declared is a typo, not a new bundle.
+#[test]
+fn a_pinned_source_for_an_unknown_bundle_is_refused() {
+    let manifest = Manifest::load(&fixture("site/tenant/site.toml")).unwrap_or_default();
+    let root = scratch("unknown-pinned");
+    let mut options = Options::new(root.clone());
+    options.pinned.insert(
+        "nosuchbundle".to_owned(),
+        assemble::Pinned {
+            path: fixture("site/alpha"),
+            rev: "1".repeat(40),
+        },
+    );
+    let err = match assemble::assemble(&manifest, &options) {
+        Ok(_) => String::new(),
+        Err(err) => err.to_string(),
+    };
+    assert!(
+        err.contains("nosuchbundle"),
+        "not refused, or wrongly: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// `--local` naming a bundle nobody declared is a typo, not a new bundle.
 #[test]
 fn a_local_override_for_an_unknown_bundle_is_refused() {
@@ -169,6 +288,91 @@ fn a_local_override_for_an_unknown_bundle_is_refused() {
         .locals
         .insert("nosuchbundle".to_owned(), fixture("site/alpha"));
     assert!(assemble::assemble(&manifest, &options).is_err());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A `fetch` key the build does not know, a bundle it cannot derive an ssh
+/// URL for, and a manifest where only some bundles opt in are all refused at
+/// load, where the message names the bundle.
+#[test]
+fn a_fetch_key_that_cannot_be_honoured_is_refused_at_load() {
+    let root = scratch("fetch-refusals");
+    let write = |body: &str| {
+        let path = root.join("site.toml");
+        let _ = std::fs::write(&path, body);
+        path
+    };
+    let head = "schema_version = 1\ntenant = \"t\"\n[site]\ntitle = \"T\"\n\
+                base_url = \"https://t.invalid/\"\n";
+    let bundle = |id: &str, repo: &str, tail: &str| {
+        format!(
+            "[[bundle]]\nid = \"{id}\"\nrepo = \"{repo}\"\nref = \"refs/heads/main\"\n\
+             rev = \"{}\"\n{tail}",
+            "1".repeat(40)
+        )
+    };
+
+    let refusal = |body: &str| match Manifest::load(&write(body)) {
+        Ok(_) => String::new(),
+        Err(err) => err.to_string(),
+    };
+
+    let unknown = format!(
+        "{head}{}",
+        bundle(
+            "a",
+            "https://forge.invalid/a.git",
+            "fetch = \"git+https\"\n"
+        )
+    );
+    let err = refusal(&unknown);
+    assert!(err.contains("git+ssh"), "not refused, or wrongly: {err}");
+
+    let underivable = format!(
+        "{head}{}",
+        bundle("a", "file:///somewhere/a", "fetch = \"git+ssh\"\n")
+    );
+    let err = refusal(&underivable);
+    assert!(err.contains("https://"), "not refused, or wrongly: {err}");
+
+    let mixed = format!(
+        "{head}{}{}",
+        bundle("a", "https://forge.invalid/a.git", "fetch = \"git+ssh\"\n"),
+        bundle("b", "https://forge.invalid/b.git", "")
+    );
+    let err = refusal(&mixed);
+    assert!(err.contains("opt"), "not refused, or wrongly: {err}");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// An assembly of a manifest that opts in lands `nix/bundles.nix` in the
+/// tree the way it lands the justfile, so the pin a `--update` rolls reaches
+/// the nix fetch specification in the same build.
+#[test]
+fn assembly_writes_the_nix_fetch_specification_for_an_opted_in_tenant() {
+    let root = scratch("bundles-nix");
+    let manifest_text = format!(
+        "schema_version = 1\ntenant = \"t\"\n[site]\ntitle = \"T\"\n\
+         base_url = \"https://t.invalid/\"\n[[bundle]]\nid = \"alpha\"\n\
+         repo = \"https://forge.invalid/owner/alpha.git\"\n\
+         ref = \"refs/heads/main\"\nrev = \"{}\"\nfetch = \"git+ssh\"\n",
+        "1".repeat(40)
+    );
+    let path = root.join("site.toml");
+    let _ = std::fs::write(&path, manifest_text);
+    let manifest = Manifest::load(&path).unwrap_or_default();
+    let mut options = Options::new(root.clone());
+    options
+        .locals
+        .insert("alpha".to_owned(), fixture("site/alpha"));
+    options.mermaid = Some(path.clone());
+    assert!(assemble::assemble(&manifest, &options).is_ok());
+    let generated = std::fs::read_to_string(root.join("nix/bundles.nix")).unwrap_or_default();
+    assert!(
+        generated.contains("url = \"ssh://git@forge.invalid/owner/alpha.git\";"),
+        "{generated}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 

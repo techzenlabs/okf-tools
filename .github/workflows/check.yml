@@ -11,13 +11,14 @@
 # that pass vacuously are worse than the ones that turn red. Naming each
 # derivation forces it.
 #
-# WHY THE FLEET AND NOT A HOSTED RUNNER. Hosted Actions on this org return a
-# red X in two seconds without running a line — a billing state, not a
-# configuration. The fleet is the estate's own, and the four site repositories
-# already target it. **This workflow cannot run until the fleet's app
-# allowlists this repository**, which is a permission and a spend decision
-# rather than a file. Until then it is verified the way the tenants' workflows
-# are: by actionlint, in a derivation, on every branch.
+# WHY A HOSTED RUNNER AND NOT THE FLEET. This job named [ria-fleet] first,
+# and every run since the workflow landed sat queued and unclaimed: the
+# fleet's app never allowlisted this repository. Michael's call, 2026-08-27,
+# is the default hosted runners. An earlier version of this comment said
+# hosted Actions on this org return a red X over billing; nothing here can
+# re-verify that claim, so whether a hosted job starts is unknown until the
+# next push. Until one runs, this file is verified the way it always was: by
+# actionlint, in the `workflow` derivation, on every branch.
 
 name: check
 
@@ -26,8 +27,7 @@ on:
     branches: [main]
   pull_request:
 
-# A second push supersedes the first. These derivations take minutes and there
-# is one fleet.
+# A second push supersedes the first. These derivations take minutes.
 concurrency:
   group: check-${{ github.ref }}
   cancel-in-progress: true
@@ -37,7 +37,7 @@ permissions:
 
 jobs:
   gates:
-    runs-on: [ria-fleet]
+    runs-on: ubuntu-latest
 
     steps:
       # No submodules anywhere in this design, so this is the whole checkout.
@@ -49,10 +49,17 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      # A hosted runner ships an ordinary Ubuntu image with no nix in it, and
+      # every later step is a nix invocation. The script is the shape bsi
+      # already runs on its Gitea runner's Ubuntu image; nothing in it holds
+      # a credential.
+      - name: Put nix on the runner
+        run: bash .github/install-nix.sh
+
       # Named one by one, deliberately. A loop would let a typo in a name
       # silently check nothing, and the whole point of the list is that it is
       # the list.
-      - name: The library, its 226 tests, clippy and rustfmt
+      - name: The library, its 238 tests, clippy and rustfmt
         run: nix build --no-link --print-build-logs .#checks.x86_64-linux.okf-tools
 
       - name: The whole site pipeline, assembled, scanned, rendered and indexed
@@ -77,3 +84,15 @@ jobs:
 
       - name: A tenant may not fork a shared layout, or fail to ignore one
         run: nix build --no-link --print-build-logs .#checks.x86_64-linux.layout-fork
+
+      - name: A hand-edited nix/bundles.nix disagrees with site.toml and goes red
+        run: nix build --no-link --print-build-logs .#checks.x86_64-linux.bundles-current
+
+      - name: packages.site builds the fixture tenant and stamps nothing as local
+        run: nix build --no-link --print-build-logs .#checks.x86_64-linux.packages-site
+
+      - name: The site build's own gates are watched refusing broken tenants
+        run: nix build --no-link --print-build-logs .#checks.x86_64-linux.site-must-fail
+
+      - name: This workflow is linted by the same derivation the tenants use
+        run: nix build --no-link --print-build-logs .#checks.x86_64-linux.workflow

@@ -90,6 +90,22 @@ pub enum ManifestError {
          fails here rather than at fetch time"
     )]
     CredentialNotAllowed { id: String, credential: String },
+    #[error(
+        "bundle `{id}`: fetch `{fetch}` is not a scheme this build knows; \
+         the only supported value is \"git+ssh\""
+    )]
+    BadFetch { id: String, fetch: String },
+    #[error(
+        "bundle `{id}`: fetch = \"git+ssh\" derives its URL from an https:// \
+         repo, and `{repo}` is not one"
+    )]
+    FetchNotDerivable { id: String, repo: String },
+    #[error(
+        "bundle `{with_fetch}` sets fetch and bundle `{without}` does not; \
+         a nix-built site needs every bundle as an input, so the bundles opt \
+         in together or not at all"
+    )]
+    FetchMixed { with_fetch: String, without: String },
     #[error("no bundles in {path}; there is nothing to assemble")]
     NoBundles { path: String },
 }
@@ -114,6 +130,17 @@ pub struct Bundle {
     /// The *name* of a secret, and never a secret.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub credential: String,
+    /// How a nix evaluation fetches this bundle, or empty for a tenant whose
+    /// site is built by CI rather than by nix.
+    ///
+    /// The only supported value is `"git+ssh"`, and the key names *only* the
+    /// scheme: the URL is derived from `repo`, so the repository's identity
+    /// stays stored once and cannot drift into a second spelling. Setting it
+    /// is what makes `okf-assemble` generate `nix/bundles.nix`, and a tenant
+    /// that sets it stops needing `credential` — the evaluating user's own
+    /// ssh key is the credential, and no token reaches any machine.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub fetch: String,
     /// A site-absolute base for a mount holding a vendored upstream, so
     /// `](/x)` in a mirrored page resolves to the upstream's live page rather
     /// than to this site's root.
@@ -123,6 +150,26 @@ pub struct Bundle {
 
 fn dot() -> String {
     ".".to_owned()
+}
+
+impl Bundle {
+    /// The URL a nix evaluation fetches this bundle from, when it opts in.
+    ///
+    /// `https://host/owner/name.git` becomes `ssh://git@host/owner/name.git`
+    /// and nothing else changes: the scheme is the whole difference, which is
+    /// why `fetch` names a scheme rather than storing a second URL. Measured
+    /// on the build machine: `git+ssh` reaches every private bundle through
+    /// the evaluating user's key, and `git+https` fails with no credential
+    /// helper.
+    #[must_use]
+    pub fn nix_fetch_url(&self) -> Option<String> {
+        if self.fetch != "git+ssh" {
+            return None;
+        }
+        self.repo
+            .strip_prefix("https://")
+            .map(|rest| format!("ssh://git@{rest}"))
+    }
 }
 
 /// The tenant's own presentation, which `okf-assemble` derives `hugo.toml`
@@ -244,6 +291,31 @@ impl Manifest {
                     subdir: bundle.subdir.clone(),
                 });
             }
+            if !bundle.fetch.is_empty() {
+                if bundle.fetch != "git+ssh" {
+                    return Err(ManifestError::BadFetch {
+                        id: bundle.id.clone(),
+                        fetch: bundle.fetch.clone(),
+                    });
+                }
+                if bundle.nix_fetch_url().is_none() {
+                    return Err(ManifestError::FetchNotDerivable {
+                        id: bundle.id.clone(),
+                        repo: bundle.repo.clone(),
+                    });
+                }
+            }
+        }
+        // All bundles opt into a nix fetch together or not at all: a partial
+        // set cannot build a site, and a check that only watched half the
+        // pins would be the drift it exists to catch.
+        let with_fetch = self.bundles.iter().find(|b| !b.fetch.is_empty());
+        let without = self.bundles.iter().find(|b| b.fetch.is_empty());
+        if let (Some(with_fetch), Some(without)) = (with_fetch, without) {
+            return Err(ManifestError::FetchMixed {
+                with_fetch: with_fetch.id.clone(),
+                without: without.id.clone(),
+            });
         }
         Ok(())
     }
@@ -388,6 +460,32 @@ mod tests {
             normalise_remote("https://github.com/owner/repo.git"),
             "https://github.com/owner/repo.git"
         );
+    }
+
+    /// The scheme is the whole difference between the stored URL and the
+    /// fetched one, which is what lets `fetch` be a scheme name rather than a
+    /// second copy of the repository's identity.
+    #[test]
+    fn a_nix_fetch_url_is_the_https_repo_with_only_the_scheme_changed() {
+        let mut bundle = Bundle {
+            id: "alpha".to_owned(),
+            repo: "https://github.com/owner/alpha.git".to_owned(),
+            git_ref: "refs/heads/main".to_owned(),
+            rev: "1".repeat(40),
+            subdir: ".".to_owned(),
+            credential: String::new(),
+            fetch: "git+ssh".to_owned(),
+            site_absolute_base: String::new(),
+        };
+        assert_eq!(
+            bundle.nix_fetch_url().as_deref(),
+            Some("ssh://git@github.com/owner/alpha.git")
+        );
+        bundle.fetch = String::new();
+        assert_eq!(bundle.nix_fetch_url(), None);
+        bundle.fetch = "git+ssh".to_owned();
+        bundle.repo = "file:///somewhere/alpha".to_owned();
+        assert_eq!(bundle.nix_fetch_url(), None);
     }
 
     /// The id is a path segment under `content/`, so the traversal shapes are

@@ -1,6 +1,5 @@
-# The self-hosted fleet's label, declared so actionlint stops reading it as a
-# typo for a hosted runner. Default labels are disabled on that fleet, so a job
-# matches by naming this and nothing else.
+# No self-hosted labels remain: every job here names a default hosted runner.
+# The file itself stays because checks.workflow hands it to actionlint by
+# path, and a named config has to exist.
 self-hosted-runner:
-  labels:
-    - ria-fleet
+  labels: []

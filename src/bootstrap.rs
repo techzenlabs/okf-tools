@@ -172,6 +172,7 @@ pub fn draft(tenant: &str, candidates: Vec<Candidate>) -> Draft {
             rev: candidate.rev.clone(),
             subdir: candidate.subdir.clone(),
             credential: format!("forge-{tenant}"),
+            fetch: String::new(),
             site_absolute_base: String::new(),
         });
     }
