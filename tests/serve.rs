@@ -33,14 +33,32 @@ impl Drop for Serving {
 
 /// A port nobody else holds, found by binding and letting go.
 ///
-/// Racy in principle and not in practice, and the alternative — parsing the
-/// bound address out of the child's stderr — is racier, because the log line
-/// arrives after the listener does and a test that reads it can hang.
+/// Racy against other processes in principle and not in practice, and the
+/// alternative — parsing the bound address out of the child's stderr — is
+/// racier, because the log line arrives after the listener does and a test
+/// that reads it can hang.
+///
+/// Racy against *this* process in practice, measured: these tests run in
+/// parallel threads, and after one thread drops its listener the kernel can
+/// hand the same port to the next thread's `bind(:0)`. Both children then
+/// race for one port, the loser exits, both readiness probes connect to the
+/// winner, and the losing test fails mid-flight with `ConnectionRefused` (the
+/// winner's test finished and killed it) or `ConnectionReset` (killed
+/// mid-request). Seen both ways before this set was added: a port is never
+/// handed out twice within the process.
 fn free_port() -> u16 {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    port
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static CLAIMED: OnceLock<Mutex<HashSet<u16>>> = OnceLock::new();
+    let claimed = CLAIMED.get_or_init(|| Mutex::new(HashSet::new()));
+    loop {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        if claimed.lock().unwrap().insert(port) {
+            return port;
+        }
+    }
 }
 
 fn binary() -> PathBuf {
