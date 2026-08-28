@@ -206,14 +206,27 @@ pub fn check_bundle(root: &Path, config: &Config) -> Result<Report, crate::confi
 /// The comparison is over the whole file, front matter included: two documents
 /// with the same body and different titles have diverged already, and saying
 /// so would be this check guessing at which difference is the meaningful one.
+///
+/// **A page with no authored body is not a second home, and the check skips
+/// it.** The first version fired on `gill-logistics/reporting-system` nine
+/// times, every hit a file a scaffold wrote: `scripts/execution/new.sh` cuts
+/// four evidence stubs and an `artifacts/index.md` into every execution pack,
+/// so seventy-seven packs carry seventy-seven byte-identical `notes.md`. The
+/// count grows with every pack and none of it is a divergence waiting to
+/// happen, because there is nothing in those files to diverge. What separates
+/// them from the fifty README copies §5.1 exists for is not their path and not
+/// their size — it is that they say nothing their own front matter does not
+/// already say. [`has_authored_body`] is that test, and a page that passes it
+/// is compared as before however many siblings it has.
 fn duplicate_content(root: &Path, pages: &[std::path::PathBuf]) -> BTreeMap<String, String> {
     let mut by_content: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for path in pages {
         let Ok(rel) = path.strip_prefix(root) else {
             continue;
         };
-        let text = walk::read_lossy(path).trim().to_owned();
-        if text.is_empty() {
+        let raw = walk::read_lossy(path);
+        let text = raw.trim().to_owned();
+        if text.is_empty() || !has_authored_body(&raw) {
             continue;
         }
         by_content
@@ -235,6 +248,45 @@ fn duplicate_content(root: &Path, pages: &[std::path::PathBuf]) -> BTreeMap<Stri
         found.insert(first[0].clone(), message);
     }
     found
+}
+
+/// Whether a page says anything its own front matter and its generated
+/// listings do not.
+///
+/// Four things are removed and what survives them is the authored body: the
+/// front matter block, every marker-delimited region `okf-index` writes,
+/// every heading, and any line that is the `description` read back. A
+/// scaffolded stub is exactly those four things and nothing else —
+///
+/// ```text
+/// ---
+/// type: Work Log
+/// title: Notes
+/// description: Capture session notes and cross-reference related evidence.
+/// ---
+///
+/// # Notes
+///
+/// Capture session notes and cross-reference related evidence.
+/// ```
+///
+/// — and so is an `artifacts/index.md`, which is a heading over a generated
+/// block. Neither is a document with a home yet; they are the empty slots a
+/// scaffold cut, and two empty slots of the same shape are not a copy.
+///
+/// Headings count as structure rather than content deliberately. A page whose
+/// only surviving lines are headings is an outline, and an outline duplicated
+/// elsewhere is the same stub finding in a different costume.
+fn has_authored_body(text: &str) -> bool {
+    let (front, body) = parse_lenient(text);
+    let description = front.get_unquoted("description");
+    let mut rest = body.to_owned();
+    for block in index::generated_blocks(body) {
+        rest = rest.replace(block, "");
+    }
+    rest.lines()
+        .map(str::trim)
+        .any(|line| !line.is_empty() && !line.starts_with('#') && line != description)
 }
 
 /// Two documents of one type sharing a number in one series (§4.2).
@@ -315,14 +367,74 @@ fn duplicate_series_numbers(root: &Path, pages: &[std::path::PathBuf]) -> BTreeM
     found
 }
 
-/// The zero-padded number a filename opens with, if it opens with one.
+/// The zero-padded series number a filename opens with, if it opens with one.
+///
+/// **A date is not a series number, and §4.3 sanctions two of them.** The
+/// first version of this read `20260708-manual-tofu-substrate-deploy.md` as
+/// series number 20260708 and `2026-07-04-rust-engineering.md` as series
+/// number 2026, so `ria-gateway-vna` reported four evidence files written on
+/// one day as a collision and a year's worth of release notes as another. Four
+/// documents dated the same day is the dated form working; a year shared by
+/// every file in `release/` is not a number at all. Both are returned as
+/// `None` here rather than filtered downstream, because a dated directory that
+/// never yields a number also never becomes a series root, and the §4.2
+/// warning stays keyed on the series it was written for.
 fn numeric_prefix(name: &str) -> Option<String> {
     let stem = name.rsplit_once('/').map_or(name, |(_, file)| file);
     let digits: String = stem.chars().take_while(char::is_ascii_digit).collect();
     if digits.is_empty() || !stem[digits.len()..].starts_with('-') {
         return None;
     }
+    if opens_with_a_date(stem, &digits) {
+        return None;
+    }
     Some(digits)
+}
+
+/// Whether `stem` opens with one of §4.3's two dated forms.
+///
+/// `YYYYMMDD-slug` and `YYYY-MM-DD-slug`, the second of which also covers the
+/// meeting form `YYYY-MM-DD-HHMM-topic`. `digits` is the run this filename
+/// opens with, already known to be followed by a `-`.
+fn opens_with_a_date(stem: &str, digits: &str) -> bool {
+    // The extension goes first, so a date carrying no slug at all —
+    // `2026-07-04.md` — ends where a slug would have started.
+    let stem = stem.strip_suffix(".md").unwrap_or(stem);
+    match digits.len() {
+        8 => is_a_date(&digits[..4], &digits[4..6], &digits[6..]),
+        // `-MM-DD` has to run out at the end of the stem or at another `-`,
+        // so `0025-12-31` reads as a date and `2026-07-041-slug` does not.
+        4 => {
+            let rest = &stem.as_bytes()[4..];
+            rest.len() >= 6
+                && rest[3] == b'-'
+                && (rest.len() == 6 || rest[6] == b'-')
+                && rest[1..3].iter().all(u8::is_ascii_digit)
+                && rest[4..6].iter().all(u8::is_ascii_digit)
+                && is_a_date(digits, &stem[5..7], &stem[8..10])
+        }
+        _ => false,
+    }
+}
+
+/// Whether three digit runs read as a calendar date a document can carry.
+///
+/// Deliberately stricter than `okf-index`'s `MONTH_PREFIX`, `^(\d{4})-?(\d{2})`,
+/// which needs a year and a month and no more. That regex sorts a listing and
+/// a wrong guess costs an ordering; here a wrong guess *silences a real
+/// collision*, so the day is required and all three fields are range-checked.
+/// The year floor is what keeps a zero-padded four-wide series out: `0016-`
+/// cannot be a year, so `plans/archive/0016-interface-note.md` is still a
+/// number.
+fn is_a_date(year: &str, month: &str, day: &str) -> bool {
+    let (Ok(year), Ok(month), Ok(day)) = (
+        year.parse::<u32>(),
+        month.parse::<u32>(),
+        day.parse::<u32>(),
+    ) else {
+        return false;
+    };
+    (1900..=2999).contains(&year) && (1..=12).contains(&month) && (1..=31).contains(&day)
 }
 
 /// The topmost ancestor of `dir` that still numbers files.
@@ -1105,5 +1217,78 @@ mod tests {
         );
         check_index(&mut report, "index.md", &root, true, &Config::default());
         assert!(report.errors.is_empty(), "{:?}", report.errors);
+    }
+}
+
+#[cfg(test)]
+mod precision {
+    use super::{has_authored_body, numeric_prefix};
+
+    /// §4.3's two dated forms are dates, and §4.2's numbers are still numbers.
+    #[test]
+    fn a_date_is_not_a_series_number() {
+        // The two false positives, measured on `ria-gateway-vna`.
+        assert_eq!(
+            numeric_prefix("compliance/20260708-manual-tofu-substrate-deploy.md"),
+            None
+        );
+        assert_eq!(
+            numeric_prefix("release/2026-07-04-rust-engineering.md"),
+            None
+        );
+        // The meeting form, `YYYY-MM-DD-HHMM-topic`, and a bare date.
+        assert_eq!(numeric_prefix("meetings/2026-05-14-1400-standup.md"), None);
+        assert_eq!(numeric_prefix("release/2026-07-04.md"), None);
+
+        // The negative control: every real series in the estate still numbers.
+        assert_eq!(
+            numeric_prefix("plans/archive/0016-interface-note.md").as_deref(),
+            Some("0016")
+        );
+        assert_eq!(
+            numeric_prefix("decisions/0025-release-and-plan-validity.md").as_deref(),
+            Some("0025")
+        );
+        assert_eq!(
+            numeric_prefix("plans/001-three-wide.md").as_deref(),
+            Some("001")
+        );
+        // Digit runs that only look like dates: a month of 13, a day of 00,
+        // and a run that keeps going where a date would have stopped.
+        assert_eq!(
+            numeric_prefix("x/20261308-slug.md").as_deref(),
+            Some("20261308")
+        );
+        assert_eq!(
+            numeric_prefix("x/2026-07-00-slug.md").as_deref(),
+            Some("2026")
+        );
+        assert_eq!(
+            numeric_prefix("x/2026-07-041-slug.md").as_deref(),
+            Some("2026")
+        );
+    }
+
+    /// A scaffolded stub says nothing its own front matter does not.
+    #[test]
+    fn a_stub_has_no_authored_body() {
+        // Verbatim from `scripts/execution/new.sh` in reporting-system.
+        assert!(!has_authored_body(
+            "---\ntype: Work Log\ntitle: Notes\ndescription: Capture session notes and cross-reference related evidence files.\n---\n\n# Notes\n\nCapture session notes and cross-reference related evidence files.\n"
+        ));
+        // A heading over a generated listing, which is what an
+        // `artifacts/index.md` is.
+        assert!(!has_authored_body(
+            "# artifacts\n\n<!-- BEGIN OKF INDEX (tools/okf-index) -->\n\n* [Notes](notes.md)\n\n<!-- END OKF INDEX -->\n"
+        ));
+
+        // The negative control: one authored sentence is a body, and the
+        // §5.1 finding survives it.
+        assert!(has_authored_body(
+            "---\ntype: Work Log\ntitle: Notes\ndescription: Capture session notes.\n---\n\n# Notes\n\nThe import job ran twice and the second run wrote nothing.\n"
+        ));
+        // A hand-maintained listing carries no markers, so its entries are
+        // authored text and stay comparable.
+        assert!(has_authored_body("# artifacts\n\n* [Notes](notes.md)\n"));
     }
 }

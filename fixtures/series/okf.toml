@@ -17,3 +17,13 @@ max_warnings = 1000
 
 [vocabulary]
 extends = ["core", "engineering"]
+
+# `evidence/`, `release/` and `packs/` were added after both set-shaped
+# warnings fired on correct content in the estate. `evidence/` holds two files
+# dated one day and `release/` two release notes a day apart — §4.3's two dated
+# forms, read as series numbers `20260708` and `2026` by the first version of
+# the §4.2 check. `packs/one` and `packs/two` hold the output of an execution
+# scaffold: byte-identical `artifacts/notes.md` and `artifacts/index.md`, which
+# is what seventy-seven packs of `gill-logistics/reporting-system` look like.
+# All three are here to be reported as clean, and the 0016, 0025 and
+# `notes/` pairs above are here to keep firing.
