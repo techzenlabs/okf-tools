@@ -17,8 +17,10 @@ fail() {
   exit 1
 }
 
+# The caller-supplied deny list, outside the tree it arms the scan over.
+export OKF_SCAN_DENY="$FIXTURES/site/tenant/deny.list"
 okf-assemble --local "alpha=$FIXTURES/site/alpha" --local "beta=$FIXTURES/site/beta"
-okf-scan content
+okf-scan . --exclude public --deny "$OKF_SCAN_DENY"
 hugo --logLevel warn > hugo.log 2>&1
 cat hugo.log
 grep -qiE '^(WARN|ERROR)' hugo.log && fail "hugo reported a warning or an error"

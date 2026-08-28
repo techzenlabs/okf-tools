@@ -1,6 +1,6 @@
 # A gate is believed only after it has been watched failing, and the
 # programme has already shipped three that could not fail. Measured on
-# 2026-08-27: delete `okf-scan content` from nix/site.nix and every check
+# 2026-08-27: delete the `okf-scan` step from nix/site.nix and every check
 # stays green; delete `okf-assemble --verify-raw`, same. Those two steps'
 # only effect is to fail, which is exactly why nothing noticed them leaving.
 #
@@ -14,7 +14,7 @@
 #
 # Three scripts, one per gate that must be able to refuse:
 #   PLANTED_SCRIPT  a bundle page carries a synthetic private-key block;
-#                   `okf-scan content` must stop the build before hugo runs.
+#                   the scan step must stop the build before hugo runs.
 #   DRAFT_SCRIPT    a bundle page says `draft: true`; hugo skips it with a
 #                   clean exit, and `okf-assemble --verify-raw` must notice
 #                   the hole in the rendered surface.

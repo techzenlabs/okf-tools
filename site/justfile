@@ -9,9 +9,29 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 # Assemble, scan, render and index. The whole build.
+#
+# The scan is pointed at the assembled site *root*, not at `content`. A
+# `content`-only scan never reads `static/` or `layouts/`, and those are where
+# the shared assets land -- a stylesheet Hugo byte-copies into `public/` and a
+# layout set rendered into every page. A comment in either publishes, and for
+# as long as this recipe read `okf-scan content` nothing in the estate
+# inspected them on the run that shipped them.
+#
+# `public/` is excluded because it is last run's output sitting in the tree
+# when this run's scan happens, and re-reading it would attribute a finding to
+# a path this build did not produce. The sources are what this scan judges.
+#
+# `--deny` is the term list, and it is **supplied by the caller**:
+# `OKF_SCAN_DENY` names a file on the machine running the build -- the other
+# tenants, their clients and their hosts, one per line. It is not in this
+# repository and must never be committed to it: three of the four site
+# repositories are controlled by a client, so a tracked roster is exactly the
+# cross-tenant disclosure the list exists to prevent. `okf-assemble` refuses
+# the build when nothing was supplied, so an unarmed scan is a red build
+# rather than a quiet green one.
 build:
     okf-assemble
-    okf-scan content
+    okf-scan . --exclude public --deny "$OKF_SCAN_DENY"
     hugo
     okf-assemble --verify-raw
     pagefind --site public

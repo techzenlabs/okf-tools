@@ -7,7 +7,7 @@ description: "The negative-control variant of alpha: one page carries a syntheti
 # Alpha, planted
 
 Everything here is synthetic. The page beside this listing exists so the
-`site-must-fail` check can watch `okf-scan content` go red inside the
+`site-must-fail` check can watch the build's scan step go red inside the
 packages.site build script — the same reason `fixtures/scan-planted` exists
 for the scanner alone.
 
