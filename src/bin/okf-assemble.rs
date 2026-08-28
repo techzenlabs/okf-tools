@@ -152,7 +152,7 @@ fn run() -> anyhow::Result<ExitCode> {
     manifest.check_credentials(allow.as_ref())?;
 
     if let Some(id) = args.update {
-        return run_update(manifest, &manifest_path, &id);
+        return run_update(&manifest, &manifest_path, &id);
     }
 
     // The scan this build is about to run has to have been armed, and the
@@ -236,13 +236,11 @@ fn run_bundles(
 /// Resolve one bundle's `ref` to a commit and write it back.
 ///
 /// The command stops there rather than assembling, which makes a roll-forward
-/// a one-line diff somebody reviews instead of drift nobody sees.
-fn run_update(
-    mut manifest: Manifest,
-    path: &std::path::Path,
-    id: &str,
-) -> anyhow::Result<ExitCode> {
-    let Some(bundle) = manifest.bundles.iter_mut().find(|b| b.id == id) else {
+/// a one-line diff somebody reviews instead of drift nobody sees. It is a
+/// one-line diff because the write is an edit of the manifest and not a
+/// re-serialisation of it: see `manifest::set_bundle_rev`.
+fn run_update(manifest: &Manifest, path: &std::path::Path, id: &str) -> anyhow::Result<ExitCode> {
+    let Some(bundle) = manifest.bundles.iter().find(|b| b.id == id) else {
         eprintln!("okf-assemble: no bundle `{id}` in {}", path.display());
         return Ok(ExitCode::FAILURE);
     };
@@ -258,8 +256,7 @@ fn run_update(
         return Ok(ExitCode::SUCCESS);
     }
     let was = bundle.rev.clone();
-    bundle.rev.clone_from(&line);
-    manifest.save(path)?;
+    manifest::set_bundle_rev(path, id, &line)?;
     println!("{id}: {was} -> {line}\nReview the diff before building.");
     Ok(ExitCode::SUCCESS)
 }

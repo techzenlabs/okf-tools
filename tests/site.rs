@@ -399,3 +399,93 @@ fn only_markdown_and_allowlisted_assets_reach_the_content_tree() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A pin bump changes the rev and not one other byte.
+///
+/// The defect this gates: `--update` wrote the manifest back through the TOML
+/// serialiser, which emits values and has no idea a comment exists. Run
+/// against a live manifest it deleted 65 of 105 lines, and among them the
+/// paragraph recording that one private repository must never be mounted on a
+/// published site. That paragraph is the only place the reasoning is written
+/// down, and `--update` is the single command the standard tells every tenant
+/// to run for a roll-forward, so nothing else had to go wrong for it to be
+/// lost — somebody just had to not read the whole diff.
+///
+/// The fixture carries a comment in each of the four places a serialiser eats
+/// one: above the file, above a `[[bundle]]` block, trailing a `rev` on its
+/// own line, and standing alone between two bundles. The assertion is byte
+/// equality against the original with the one rev substituted, so a preserved
+/// comment that moved, or a blank line that closed up, fails it just as a
+/// deleted paragraph does.
+#[test]
+fn a_pin_bump_rewrites_the_rev_and_nothing_else() {
+    let root = scratch("repin");
+    let original = std::fs::read_to_string(fixture("site/commented/site.toml")).unwrap_or_default();
+    assert!(
+        original.contains("never be mounted") && original.contains("# rolled by hand once"),
+        "the fixture lost the comments it exists to carry"
+    );
+    let path = root.join("site.toml");
+    let _ = std::fs::write(&path, &original);
+
+    let rolled = "3".repeat(40);
+    let outcome = manifest::set_bundle_rev(&path, "alpha", &rolled);
+    assert!(outcome.is_ok(), "{outcome:?}");
+
+    let after = std::fs::read_to_string(&path).unwrap_or_default();
+    let expected = original.replace(&"1".repeat(40), &rolled);
+    assert_ne!(after, original, "the repin wrote nothing");
+    assert_eq!(
+        after, expected,
+        "a pin bump changed something other than alpha's rev"
+    );
+
+    // And the manifest still means what it did, with the one value moved.
+    let reloaded = Manifest::load(&path).unwrap_or_default();
+    assert_eq!(reloaded.bundles[0].rev, rolled);
+    assert_eq!(reloaded.bundles[1].rev, "2".repeat(40));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A bundle nobody declared is refused, and the file is left as it was.
+///
+/// The edit is the write, so "no such bundle" has to fail before touching the
+/// file rather than after truncating it.
+#[test]
+fn a_repin_of_an_unknown_bundle_refuses_and_leaves_the_file_alone() {
+    let root = scratch("repin-unknown");
+    let original = std::fs::read_to_string(fixture("site/commented/site.toml")).unwrap_or_default();
+    let path = root.join("site.toml");
+    let _ = std::fs::write(&path, &original);
+    assert!(manifest::set_bundle_rev(&path, "nosuchbundle", &"3".repeat(40)).is_err());
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap_or_default(),
+        original,
+        "a refused repin still rewrote the manifest"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The other spelling of a bundle list. `bundle = [{ ... }]` parses to the
+/// same manifest as `[[bundle]]`, so a repin that only knew about the block
+/// form would report success over a file it never edited.
+#[test]
+fn a_repin_reaches_a_bundle_written_as_an_inline_table() {
+    let root = scratch("repin-inline");
+    let path = root.join("site.toml");
+    let body = format!(
+        "schema_version = 1\ntenant = \"t\"\n\n# still a comment\n\
+         bundle = [{{ id = \"alpha\", repo = \"https://forge.invalid/a.git\", \
+         ref = \"refs/heads/main\", rev = \"{}\" }}]\n\n\
+         [site]\ntitle = \"T\"\nbase_url = \"https://t.invalid/\"\n",
+        "1".repeat(40)
+    );
+    let _ = std::fs::write(&path, &body);
+    let rolled = "3".repeat(40);
+    let outcome = manifest::set_bundle_rev(&path, "alpha", &rolled);
+    assert!(outcome.is_ok(), "{outcome:?}");
+    let after = std::fs::read_to_string(&path).unwrap_or_default();
+    assert_eq!(after, body.replace(&"1".repeat(40), &rolled));
+    assert!(after.contains("# still a comment"));
+    let _ = std::fs::remove_dir_all(&root);
+}
