@@ -316,6 +316,18 @@ h1, h2, h3 { line-height: 1.25; }
 
 /* The current page in its own sibling list: marked, never a self-link. */
 .okf-sib-here { font-weight: 600; }
+
+/* The same strip one level up: `list.html`'s peer sections. It is the leaf
+   nav's shape without the Previous/Next row — a section has no reading
+   order to step through, only neighbours to jump to — so it reuses the
+   heading, the list and the "you are here" mark and restyles none of
+   them. */
+.okf-peers {
+  margin-block-start: 3rem;
+  border-block-start: 1px solid var(--okf-rule);
+  padding-block-start: 0.9rem;
+  font-size: 0.9rem;
+}
 /* ---- end sibling navigation -------------------------------------------- */
 
 /* One card per bundle, and the whole front door. Two columns where there is

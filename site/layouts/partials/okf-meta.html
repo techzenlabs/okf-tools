@@ -19,7 +19,9 @@
   anchors with nothing inside them, which is invisible rather than wrong.
 
   `humanize` ordinalises a numeric string, so an `archive/2026/` directory
-  came out as "2026th" in the browser tab. Digits are returned unchanged.
+  came out as "2026th" in the browser tab. Digits are returned unchanged, and
+  a directory whose whole name is an acronym is looked up in the table below
+  rather than title-cased into "Adr".
 
   The tier is derived and never stored. No `verified` at all is unverified; a
   `verified` entry whose actor is not a `human:` one is machine-confirmed; a
@@ -75,7 +77,30 @@
   {{- if findRE "^[0-9]+$" $base -}}
     {{- $display = $base -}}
   {{- else if $base -}}
-    {{- $display = humanize $base -}}
+    {{- /* `humanize` title-cases, which is right for `architecture` and
+           wrong for `adr`: every section in a conformant bundle arrives
+           with no title, so an acronym directory renders as "Adr" on the
+           breadcrumb, the H1, every listing entry and the browser tab.
+
+           A table here rather than a config key. The alternative on offer
+           was `[params.okf_titles]` in each tenant's `site.toml`, which
+           would put a fact `okf.toml` already owns into a second
+           repository, four times over, and cost a schema change against
+           `deny_unknown_fields` on the way. This is one file in okf-tools,
+           shared by all four tenants, with nothing to keep in step.
+
+           Whole-segment matches only. A directory is either the acronym or
+           it is not; splitting `sms-app` into parts and capitalising some
+           of them is a rewriting rule rather than a lookup, and it would
+           start guessing at names nobody put in this table. */ -}}
+    {{- $acronyms := dict
+          "adr" "ADR" "api" "API" "ci" "CI" "ris" "RIS" "vna" "VNA"
+          "ai" "AI" "hr" "HR" "cxt" "CXT" "sms" "SMS" -}}
+    {{- with index $acronyms (lower $base) -}}
+      {{- $display = . -}}
+    {{- else -}}
+      {{- $display = humanize $base -}}
+    {{- end -}}
   {{- end -}}
 {{- end -}}
 {{- $display -}}

@@ -5,8 +5,17 @@
   It sits at the tenant root, at every section root and on every term page, so
   `/team/data-team/llms.txt` is a cross-bundle reading list that no HTML
   scraping reconstructs.
+
+  The H1 goes through the `title` region, not `.Title`. OKF §8 allows front
+  matter on `index.md` only at a bundle root, so every section in a conformant
+  bundle arrives with no title at all and `# {{ .Title }}` opened every one of
+  those files with a bare `# ` — the first line an agent reads, and the one
+  thing on the page that says what it is a reading list of. It is the same bug
+  the breadcrumb had before ede41d6 and the same fix: one region, used by the
+  crumb, the H1 and the listing entries below, so a section's display title has
+  one definition.
 */ -}}
-# {{ .Title }}
+# {{ partial "okf-meta.html" (dict "page" . "region" "title") }}
 {{ with .Params.description }}
 {{ . }}
 {{ end }}
