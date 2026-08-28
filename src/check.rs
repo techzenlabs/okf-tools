@@ -22,6 +22,7 @@ use regex::Regex;
 use crate::collision::Collision;
 use crate::config::{Confidentiality, Config};
 use crate::frontmatter::{self, Frontmatter, ParseError, parse_lenient, parse_strict, unquote};
+use crate::index;
 use crate::links::{self, Target};
 use crate::staleness::Day;
 use crate::walk;
@@ -753,19 +754,45 @@ fn check_index(report: &mut Report, path: &str, text: &str, is_root: bool, confi
         body = &stripped;
     }
 
+    // The heading is the file's, not the listing's, so it is asked of the
+    // whole body. Everything below asks about entry format, which is a
+    // question about the generated listing alone.
     if !SECTION_HEADING.is_match(body) {
         report.err(path, "index.md has no section heading (§8)");
     }
-    let has_entries = INDEX_ENTRY.is_match(body);
-    if INDEX_BULLET.is_match(body) && !has_entries {
+    let listing = listing_scope(body);
+    let has_entries = INDEX_ENTRY.is_match(&listing);
+    if INDEX_BULLET.is_match(&listing) && !has_entries {
         report.err(
             path,
             "index.md entries must be `* [Title](path) - description` (§8)",
         );
     }
-    if body.lines().any(|line| line.starts_with("- ")) {
+    if listing.lines().any(|line| line.starts_with("- ")) {
         report.err(path, "index.md entries use `*`, not `-` (§8)");
     }
+}
+
+/// The text §8's entry-format rules are about.
+///
+/// §8 governs the *listing*, and §10.6 requires a hand-written lead above it,
+/// so a bullet an author writes in that lead is prose and not a malformed
+/// entry. Reading the whole file made those two sections contradict each
+/// other, and one migration rewrote eighteen legitimate sentences to settle
+/// the argument in the checker's favour.
+///
+/// The block is [`index::generated_blocks`] — the generator's own definition,
+/// asked for rather than re-matched. A file that carries no block at all
+/// yields its whole body: with no markers there is nothing to tell a lead from
+/// a listing, so the pre-existing reading stands, and a hand-maintained
+/// listing keeps the gate it has always had rather than escaping it by
+/// deleting two comments.
+fn listing_scope(body: &str) -> String {
+    let blocks = index::generated_blocks(body);
+    if blocks.is_empty() {
+        return body.to_owned();
+    }
+    blocks.join("\n")
 }
 
 /// A `README.md` in a bundle that has retired the name.
@@ -1035,5 +1062,48 @@ mod tests {
             &Config::default(),
         );
         assert!(report.errors.iter().any(|e| e.contains("`*`, not `-`")));
+    }
+
+    /// Four cases the scoping has to separate, in one place.
+    ///
+    /// The lead one is the defect: §10.6 puts hand-written prose above the
+    /// markers and §8's entry format has nothing to say about it. The near
+    /// marker is the reason the generator's exact constant is used and not the
+    /// `<!-- BEGIN OKF INDEX` prefix a template matches on: a sentence naming
+    /// the prefix must not open a block, or the bullet after it is judged as
+    /// an entry.
+    #[test]
+    fn entry_format_is_judged_inside_the_generated_block_and_nowhere_else() {
+        let dashed = |text: &str| {
+            let mut report = Report::default();
+            check_index(&mut report, "index.md", text, false, &Config::default());
+            report.errors
+        };
+        let block = |body: &str| format!("{}\n{body}\n{}", index::BEGIN, index::END);
+
+        let lead = format!(
+            "# D\n\n- a hand-written bullet\n\n{}\n",
+            block("* [T](p.md) - d")
+        );
+        assert!(dashed(&lead).is_empty(), "{:?}", dashed(&lead));
+
+        let inside = format!("# D\n\n{}\n", block("- [T](p.md) - d"));
+        assert!(dashed(&inside).iter().any(|e| e.contains("`*`, not `-`")));
+
+        let near = format!(
+            "# D\n\nthe block opens at `<!-- BEGIN OKF INDEX`.\n\n- prose\n\n{}\n",
+            block("* [T](p.md) - d")
+        );
+        assert!(dashed(&near).is_empty(), "{:?}", dashed(&near));
+
+        // Bundle-root frontmatter is stripped before the markers are looked
+        // for, so a root index is scoped like any other.
+        let mut report = Report::default();
+        let root = format!(
+            "---\nokf_version: \"0.2\"\n---\n\n# D\n\n- a lead bullet\n\n{}\n",
+            block("* [T](p.md) - d")
+        );
+        check_index(&mut report, "index.md", &root, true, &Config::default());
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
     }
 }

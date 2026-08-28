@@ -83,6 +83,8 @@ fn conformance_fixture_reports_exactly_the_expected_diagnostics() {
     assert_eq!(
         report.errors,
         [
+            "bad-index-block-dash/index.md: index.md entries must be `* [Title](path) - description` (§8)",
+            "bad-index-block-dash/index.md: index.md entries use `*`, not `-` (§8)",
             "bad-index-dash/index.md: index.md entries must be `* [Title](path) - description` (§8)",
             "bad-index-dash/index.md: index.md entries use `*`, not `-` (§8)",
             "bad-index-frontmatter/index.md: index.md may only carry frontmatter at the bundle root (§8)",
@@ -96,7 +98,27 @@ fn conformance_fixture_reports_exactly_the_expected_diagnostics() {
             "concepts/tab-indent.md: line 3: tab indentation is not valid YAML",
         ]
     );
-    assert_eq!(report.checked, 22);
+    assert_eq!(report.checked, 24);
+}
+
+/// §8 judges the generated listing, and §10.6 puts hand-written prose above
+/// it, so a bullet in that prose is not a malformed entry.
+///
+/// The fixture carries what the two sections together permit and the checker
+/// used to refuse: a `- ` bullet in the lead, a sentence naming
+/// `<!-- BEGIN OKF INDEX` that is prose and not a marker, a second bullet
+/// after it, and a correct generated block below. Before the block-scoping it
+/// reported the star-not-dash error against that lead, and a migration rewrote
+/// eighteen real sentences in one bundle to silence it. Its counterpart is
+/// `bad-index-block-dash`, above: a dash entry *inside* the block still fails,
+/// which is what keeps this a narrowing rather than a removal.
+#[test]
+fn a_hand_written_bullet_above_the_markers_is_prose_and_not_an_entry() {
+    let (root, config) = load("conformance");
+    let report = check::check_bundle(&root, &config).unwrap_or_default();
+    for finding in report.errors.iter().chain(report.warnings.iter()) {
+        assert!(!finding.contains("good-index-lead"), "{finding}");
+    }
 }
 
 /// §8's URL collision, and the two shapes that look like it and are not.
