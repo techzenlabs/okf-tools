@@ -133,9 +133,9 @@ h1, h2, h3 { line-height: 1.25; }
    title as a lede, so it is pulled up against the H1's bottom margin and
    sized between the heading and the body text. One demotion, both
    templates: `.okf-section` is `list.html` and `.okf-page` is
-   `single.html`, where the same orphan read worst — a third of gill's
-   described documents open with a description that is a prefix of their
-   own first paragraph. Duplication is not suppressed there — the call on
+   `single.html`, where the same orphan read worst — in the corpus that
+   was measured, a third of the described documents open with a
+   description that is a prefix of their own first paragraph. Duplication is not suppressed there — the call on
    that is in `single.html`'s header comment. */
 .okf-section > .okf-description,
 .okf-page > .okf-description {
