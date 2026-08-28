@@ -56,6 +56,21 @@ pub enum ManifestError {
         #[source]
         source: toml::ser::Error,
     },
+    #[error("{path}: could not be re-read for a pin edit: {source}")]
+    Edit {
+        path: String,
+        #[source]
+        source: toml_edit::TomlError,
+    },
+    #[error("{path}: has no bundle `{id}` to repin")]
+    NoSuchBundle { path: String, id: String },
+    #[error(
+        "{path}: repinning `{id}` would have changed something other than \
+         that bundle's rev, so nothing was written. Report this: the edit is \
+         meant to touch one value and a manifest it cannot edit safely is a \
+         manifest it must not rewrite"
+    )]
+    UnsafeEdit { path: String, id: String },
     #[error(
         "{path}: schema_version {found} is newer than this build understands \
          ({SUPPORTED_SCHEMA_VERSION}); upgrade okf-tools"
@@ -126,7 +141,7 @@ pub enum ManifestError {
 }
 
 /// One source repository, mounted at `content/<id>/`.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Bundle {
     /// The stable identity, and the mount path.
@@ -189,7 +204,7 @@ impl Bundle {
 
 /// The tenant's own presentation, which `okf-assemble` derives `hugo.toml`
 /// from so the generator configuration cannot fork per tenant.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct SiteSettings {
     pub title: String,
@@ -197,7 +212,7 @@ pub struct SiteSettings {
     pub description: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Manifest {
     pub schema_version: u32,
@@ -251,9 +266,18 @@ impl Manifest {
 
     /// Write the manifest back, preserving nothing but its values.
     ///
-    /// Only `--bootstrap` and `--update` call this, and `--local` never does:
-    /// a local override is an argument for one invocation, and when a working
-    /// tree and the pinned `rev` disagree the manifest wins.
+    /// **This drops every comment and every choice of layout in the file, so
+    /// it is only ever correct for a manifest this tool is creating.** Only
+    /// `--bootstrap` calls it, and only after `is_empty_manifest` has said
+    /// there is no reviewed manifest there to lose. A pin bump goes through
+    /// [`set_bundle_rev`] instead: `--update` is the one command the standard
+    /// tells every tenant to run, and routing it through here deleted 65
+    /// lines of a live manifest — including the paragraph saying which
+    /// private bundle must never be mounted.
+    ///
+    /// `--local` never writes at all: a local override is an argument for one
+    /// invocation, and when a working tree and the pinned `rev` disagree the
+    /// manifest wins.
     ///
     /// # Errors
     ///
@@ -378,6 +402,133 @@ impl Manifest {
             .map(|e| e.trim_start_matches('.').to_lowercase())
             .collect()
     }
+}
+
+/// Repin one bundle: rewrite its `rev` in `site.toml` and change nothing else.
+///
+/// A manifest is a document as much as it is data. The `ria` manifest carries
+/// a paragraph saying that `ria/ria-documentation` — a private client
+/// engagement record — is deliberately absent and must never be mounted, and
+/// that paragraph is the only place that reasoning is written down. Round
+/// tripping the file through a serialiser deletes it: the serialiser emits
+/// values, and a comment is not a value. So the pin bump edits the document
+/// rather than regenerating it.
+///
+/// `toml_edit` is what makes that a value substitution instead of a text
+/// substitution. The alternative — find the `[[bundle]]` block, find the line
+/// starting `rev`, splice — is a second, worse TOML parser: it has to be told
+/// about literal strings, inline tables, a `rev` inside a comment, and a
+/// bundle written `bundle = [{ ... }]`, and every one it gets wrong either
+/// corrupts the file or silently repins the wrong bundle. Here the DOM
+/// answers all of those, and the value's decor is carried across so a comment
+/// trailing the `rev` on its own line survives too.
+///
+/// The rewrite is then checked before it lands: the rendered text is parsed
+/// back as a [`Manifest`] and compared against the manifest that was read,
+/// with only this bundle's rev changed. Nothing is written unless they agree.
+/// A file that gates a client's confidentiality is one where a wrong edit
+/// costs more than a refused one.
+///
+/// # Errors
+///
+/// Fails when the file cannot be read, re-parsed, or written; when no bundle
+/// carries `id`; and when the rewrite would have changed anything beyond that
+/// bundle's `rev`, in which case the file is left untouched.
+pub fn set_bundle_rev(path: &Path, id: &str, rev: &str) -> Result<(), ManifestError> {
+    let shown = path.display().to_string();
+    let text = std::fs::read_to_string(path).map_err(|source| ManifestError::Read {
+        path: shown.clone(),
+        source,
+    })?;
+    let before: Manifest = toml::from_str(&text).map_err(|source| ManifestError::Parse {
+        path: shown.clone(),
+        source,
+    })?;
+    let mut document: toml_edit::DocumentMut =
+        text.parse().map_err(|source| ManifestError::Edit {
+            path: shown.clone(),
+            source,
+        })?;
+
+    let edited = document
+        .get_mut("bundle")
+        .is_some_and(|bundles| repin(bundles, id, rev));
+    if !edited {
+        return Err(ManifestError::NoSuchBundle {
+            path: shown,
+            id: id.to_owned(),
+        });
+    }
+
+    let rendered = document.to_string();
+    let mut expected = before;
+    for bundle in &mut expected.bundles {
+        if bundle.id == id {
+            rev.clone_into(&mut bundle.rev);
+        }
+    }
+    let after: Manifest = toml::from_str(&rendered).map_err(|source| ManifestError::Parse {
+        path: shown.clone(),
+        source,
+    })?;
+    if after != expected {
+        return Err(ManifestError::UnsafeEdit {
+            path: shown,
+            id: id.to_owned(),
+        });
+    }
+
+    std::fs::write(path, rendered).map_err(|source| ManifestError::Write {
+        path: shown,
+        source,
+    })
+}
+
+/// Set `rev` on the bundle carrying `id`, reporting whether one was found.
+///
+/// Both spellings of a bundle list are handled: `[[bundle]]` blocks, which is
+/// what every manifest in this estate uses and what `--bootstrap` writes, and
+/// `bundle = [{ ... }]`, which parses to the same manifest and would
+/// otherwise be repinned by nobody while the command still reported success.
+fn repin(bundles: &mut toml_edit::Item, id: &str, rev: &str) -> bool {
+    if let Some(tables) = bundles.as_array_of_tables_mut() {
+        for table in tables.iter_mut() {
+            if table.get("id").and_then(toml_edit::Item::as_str) == Some(id) {
+                return table
+                    .get_mut("rev")
+                    .and_then(toml_edit::Item::as_value_mut)
+                    .is_some_and(|value| {
+                        replace_in_place(value, rev);
+                        true
+                    });
+            }
+        }
+    }
+    if let Some(array) = bundles.as_array_mut() {
+        for entry in array.iter_mut() {
+            let Some(table) = entry.as_inline_table_mut() else {
+                continue;
+            };
+            if table.get("id").and_then(toml_edit::Value::as_str) == Some(id) {
+                return table.get_mut("rev").is_some_and(|value| {
+                    replace_in_place(value, rev);
+                    true
+                });
+            }
+        }
+    }
+    false
+}
+
+/// Swap a value, keeping the whitespace and comments that surround it.
+///
+/// The decor is the reason this is not an assignment: a value's suffix holds
+/// anything trailing it on the line, so `rev = "…"  # bumped 2026-08-14` keeps
+/// its note through a repin.
+fn replace_in_place(value: &mut toml_edit::Value, rev: &str) {
+    let decor = value.decor().clone();
+    *value = toml_edit::Value::from(rev);
+    *value.decor_mut() = decor;
 }
 
 /// The environment variable naming the caller-supplied `okf-scan` deny list.

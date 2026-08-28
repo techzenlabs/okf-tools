@@ -1,0 +1,44 @@
+# The fixture tenant for the pin-bump gate, and every comment here is load
+# bearing.
+#
+# A manifest is a document as much as it is data. The comment a real one
+# carries is the reasoning for what is *not* in it — the bundle that must
+# never be mounted, and why — and that reasoning lives nowhere else. So this
+# file exists to be repinned and compared byte for byte: `--update` may change
+# the one `rev` it was asked for and must leave everything below untouched.
+#
+# Every name here is invented and names nobody.
+schema_version = 1
+tenant = "fixture"
+asset_extensions = []
+
+[site]
+title = "Fixture tenant"
+base_url = "https://fixture.invalid/"
+description = "A manifest that carries comments in the four places a serialiser eats them."
+
+# A comment introducing the first bundle, above its block.
+[[bundle]]
+id = "alpha"
+repo = "https://forge.invalid/owner/alpha.git"
+ref = "refs/heads/main"
+rev = "1111111111111111111111111111111111111111" # rolled by hand once, before the tool existed
+subdir = "docs"
+credential = "forge-fixture"
+
+# A block comment sitting between two bundles, which is where the reasoning
+# about a repository goes when the reasoning is about the gap between them.
+#
+# `owner/private-record` is deliberately absent. It is the best-formed source
+# in this invented estate, which is exactly what makes the mistake available;
+# it is an engagement record and it never publishes. Deleting this paragraph
+# is the defect this fixture gates.
+
+[[bundle]]
+id = "beta"
+repo = "https://forge.invalid/owner/beta.git"
+ref = "refs/heads/release"
+rev = "2222222222222222222222222222222222222222"
+subdir = "."
+credential = "forge-fixture"
+# A trailing comment, after the last bundle, with no blank line before it.
