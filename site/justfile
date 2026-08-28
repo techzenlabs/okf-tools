@@ -39,6 +39,10 @@ build:
 # The same pipeline against a working tree, for authoring. `--local` is an
 # argument and is never written to site.toml: when a working tree and the
 # pinned rev disagree, the manifest wins.
+#
+# This wants `OKF_SCAN_DENY` set too. `okf-assemble` asserts it on every
+# assembly rather than only inside `build`, because a gate that fires only on
+# the recipe nobody runs locally is a gate a tenant discovers in CI.
 serve *ARGS:
     okf-assemble {{ ARGS }}
     hugo server --bind 127.0.0.1 --port 1313 --disableFastRender

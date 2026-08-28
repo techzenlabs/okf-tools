@@ -37,9 +37,7 @@ fn run() -> anyhow::Result<ExitCode> {
             "--deny" => {
                 let path = args.next().unwrap_or_default();
                 let text = std::fs::read_to_string(&path)?;
-                options
-                    .deny
-                    .extend(okf_tools::manifest::deny_terms(&text));
+                options.deny.extend(okf_tools::manifest::deny_terms(&text));
             }
             "--exclude" => options.exclude.push(args.next().unwrap_or_default()),
             other if other.starts_with("--") => {

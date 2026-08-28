@@ -254,10 +254,7 @@ fn duplicate_content(root: &Path, pages: &[std::path::PathBuf]) -> BTreeMap<Stri
 /// A warning, so it lands inside the `max_warnings` budget: a shared number is
 /// a readability defect, not a non-conformance, and failing a build over one
 /// would be the wrong instrument.
-fn duplicate_series_numbers(
-    root: &Path,
-    pages: &[std::path::PathBuf],
-) -> BTreeMap<String, String> {
+fn duplicate_series_numbers(root: &Path, pages: &[std::path::PathBuf]) -> BTreeMap<String, String> {
     // Every directory that numbers anything, so a series root can be found by
     // walking up while the answer is still yes.
     let mut numbering: BTreeSet<String> = BTreeSet::new();
@@ -270,7 +267,9 @@ fn duplicate_series_numbers(
         let Some(number) = numeric_prefix(&name) else {
             continue;
         };
-        let dir = name.rsplit_once('/').map_or(String::new(), |(d, _)| d.to_owned());
+        let dir = name
+            .rsplit_once('/')
+            .map_or(String::new(), |(d, _)| d.to_owned());
         numbering.insert(dir.clone());
         let ctype = parse_lenient(&walk::read_lossy(path))
             .0

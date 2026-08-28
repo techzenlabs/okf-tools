@@ -59,7 +59,7 @@ jobs:
       # Named one by one, deliberately. A loop would let a typo in a name
       # silently check nothing, and the whole point of the list is that it is
       # the list.
-      - name: The library, its 238 tests, clippy and rustfmt
+      - name: The library, its tests, clippy and rustfmt
         run: nix build --no-link --print-build-logs .#checks.x86_64-linux.okf-tools
 
       - name: The whole site pipeline, assembled, scanned, rendered and indexed
@@ -81,6 +81,12 @@ jobs:
 
       - name: This repository is public, so it scans itself
         run: nix build --no-link --print-build-logs .#checks.x86_64-linux.self-scan
+
+      # The gate that would have caught a tenant name in a shipped
+      # stylesheet: the build's scan reads the assembled static/ and
+      # layouts/ trees, and a build whose scan was never armed is refused.
+      - name: A tenant name planted in static/ fails the build
+        run: nix build --no-link --print-build-logs .#checks.x86_64-linux.scan-site-root
 
       - name: A tenant may not fork a shared layout, or fail to ignore one
         run: nix build --no-link --print-build-logs .#checks.x86_64-linux.layout-fork
