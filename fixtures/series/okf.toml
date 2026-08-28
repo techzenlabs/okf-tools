@@ -1,0 +1,19 @@
+# A synthetic bundle for the two set-shaped warnings: a number shared inside
+# one series (§4.2) and two files holding the same bytes (§5.1). Both are
+# questions about a group of files rather than about one, which is why neither
+# could be answered inside the per-file walk and why both need a bundle to
+# themselves rather than a page.
+#
+# Every name here is invented. The shapes are real: `plans/` holding work
+# items over an `archive/` of execution plans is the ratified merge whose
+# arithmetic a tree-only check would report as a defect, and it is in this
+# fixture to be reported as clean.
+config_version = 1
+okf_version = "0.2"
+bundle_root = "."
+title = "Series fixture"
+description = "One shared number per series, and one duplicated file."
+max_warnings = 1000
+
+[vocabulary]
+extends = ["core", "engineering"]

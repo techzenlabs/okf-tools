@@ -179,9 +179,9 @@
         .filter((value) => counts[value] > 0)
         .sort();
       // Two, not one. A control offering a single value narrows nothing —
-      // gill's whole corpus is `trust: unverified`, so a Trust select there
-      // is a control that cannot change the answer, sitting beside one that
-      // can.
+      // a corpus whose every page is `trust: unverified` gets a Trust
+      // select that cannot change the answer, sitting beside one that can.
+      // One mounted bundle in this estate is exactly that.
       if (values.length < 2) {
         select.closest(".okf-filter").hidden = true;
         continue;

@@ -324,7 +324,16 @@ than at fetch time.
 ### The recipes
 
 `just build` runs assemble, scan, hugo, the raw-markdown comparison and
-pagefind. `just serve` adds `hugo server` on localhost and takes `--local
+pagefind. The scan reads the assembled site *root* with `public/` excluded,
+not `content/` alone: `static/` and `layouts/` are where the shared assets
+land, Hugo byte-copies `static/` into `public/`, and a comment in a shared
+stylesheet is served to every reader of every tenant. It needs a deny list,
+supplied by the caller in `OKF_SCAN_DENY` — a file on the machine running the
+build, holding the other tenants, their clients and their hosts, one per line.
+`okf-assemble` refuses to assemble without one, so an unarmed tenant is a red
+build rather than a quiet green one, and the list is never committed to any
+repository: three of the four site repositories are controlled by a client, so
+a tracked roster would be exactly the disclosure it exists to prevent. `just serve` adds `hugo server` on localhost and takes `--local
 <id>=<path>`, which points one bundle at a working tree for that invocation
 only. The override is an argument and is never written to the manifest: when a
 working tree and the pinned `rev` disagree, the manifest wins, and the page
@@ -765,7 +774,7 @@ travels and its test fails.
 
 ## What checks this repository
 
-Nine derivations, and CI builds each one **by name**:
+Thirteen derivations, and CI builds each one **by name**:
 
 | check | what it holds |
 |---|---|
@@ -775,9 +784,13 @@ Nine derivations, and CI builds each one **by name**:
 | `leaf-bundle-rename` | an `index.md` is renamed rather than silently dropped |
 | `pinned-commit` | the manifest's rev is the one that gets built |
 | `scan-negative-control` | `okf-scan` is watched failing on a planted fixture before any clean run is accepted |
+| `scan-site-root` | a tenant name planted in `static/` passes the old `okf-scan content` and fails the shipped recipe, and an unarmed scan refuses the build |
 | `self-scan` | this repository is public, so it scans itself |
 | `layout-fork` | a tenant may not track a shared layout, or fail to ignore one |
-| `workflow` | actionlint over the workflow, because the workflow cannot yet be verified by running |
+| `bundles-current` | a hand-edited `nix/bundles.nix` disagrees with `site.toml` and goes red |
+| `packages-site` | the fixture tenant's site builds, and a verified pin is stamped as nothing |
+| `site-must-fail` | the site build's own gates are watched refusing three broken tenants |
+| `workflow` | actionlint over the workflow, which is the only verification available for it |
 
 **By name, not `nix flake check`.** That command evaluates, and a derivation
 already in the store or the cache is reported as checked without being run.
@@ -785,12 +798,19 @@ Twenty-two instances of that failure mode are inventoried in
 `mikeslade/dotfiles#202`, and the ones that pass vacuously are worse than the
 ones that turn red.
 
-`.github/workflows/check.yml` runs all nine on the estate's self-hosted fleet.
-**It cannot run until that fleet's app allowlists this repository** — hosted
-Actions on this org return a red X in two seconds without executing a line,
-which is a billing state rather than a configuration. Until then the workflow
-is verified the only way available: statically, in the `workflow` derivation,
-on every branch.
+`.github/workflows/check.yml` runs all thirteen, one `nix build` per name, on
+`runs-on: ubuntu-latest`. It named the estate's self-hosted fleet for exactly
+one commit and every run sat queued and unclaimed, because that fleet's app
+never allowlisted this repository. An earlier version of this paragraph said
+hosted Actions on this org return a red X over billing; nothing here can
+re-verify that, so whether a hosted job starts is unknown until the next push,
+and the workflow file itself is verified statically in the `workflow`
+derivation on every branch either way.
+
+Running the gates locally by name stays right regardless, and for a reason
+that has nothing to do with runners: `src/layouts.rs` `include_str!`s the
+templates and the justfile into the binary, so a template edit reaches nothing
+until `cargo build`. A negative control run without one reports a false green.
 
 ## Prior art
 

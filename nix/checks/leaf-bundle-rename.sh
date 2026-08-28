@@ -6,6 +6,11 @@
 # fixture renders the same five files twice and asserts both counts.
 set -euo pipefail
 export HOME="$TMPDIR"
+# `okf-assemble` refuses a build whose scan was never armed with a deny
+# list, so every check that assembles supplies the fixture tenant's. The
+# file sits outside any tree these checks scan, which is the shape a real
+# tenant's has: on the machine that runs the build, in no repository.
+export OKF_SCAN_DENY="$FIXTURES/site/tenant/deny.list"
 site="$TMPDIR/leaf"
 mkdir -p "$site"
 cd "$site"

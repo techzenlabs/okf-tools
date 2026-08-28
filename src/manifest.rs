@@ -108,6 +108,21 @@ pub enum ManifestError {
     FetchMixed { with_fetch: String, without: String },
     #[error("no bundles in {path}; there is nothing to assemble")]
     NoBundles { path: String },
+    #[error(
+        "this build's scan was supplied no deny list: set {DENY_LIST_ENV} to a \
+         file holding one term per line. The terms are the other tenants, \
+         their clients and their hosts; the file is the caller's, lives on \
+         the machine that runs the build, and is never committed to any \
+         repository -- a tracked roster is the disclosure the list exists to \
+         prevent"
+    )]
+    DenyListUnsupplied,
+    #[error(
+        "{path}: the deny list this build was given holds no terms; an armed \
+         scan needs at least one, and an empty file is indistinguishable from \
+         a scan nobody armed"
+    )]
+    DenyListEmpty { path: String },
 }
 
 /// One source repository, mounted at `content/<id>/`.
@@ -365,6 +380,82 @@ impl Manifest {
     }
 }
 
+/// The environment variable naming the caller-supplied `okf-scan` deny list.
+///
+/// A path, never the terms: the value is read by `okf-scan --deny`, and the
+/// only thing asserted here is that the caller supplied one and that it has
+/// something in it.
+pub const DENY_LIST_ENV: &str = "OKF_SCAN_DENY";
+
+/// Assert this build's scan was armed with a non-empty deny list.
+///
+/// This sits beside `check_credentials` for the same reason that one does: it
+/// turns a silence into a red build at the first line of the job. Every
+/// tenant's `just build` scans the assembled site root, and the scan is only
+/// as good as the terms it was given -- with none, `okf-scan` reports clean
+/// over a stylesheet naming another tenant's client, which is the state all
+/// four tenants were live in.
+///
+/// **The assertion is on supply, not on a tracked file, and the distinction
+/// is the whole of it.** "A deny file exists at this path in the repository"
+/// cannot be satisfied by an untracked file, so it would fail in every fresh
+/// clone and could only be gone green by committing the roster -- and three
+/// of the four site repositories are controlled by a client, so the gate
+/// itself would create the disclosure it exists to prevent. Phrased as "the
+/// caller supplied a non-empty list", it fails a tenant that never armed the
+/// scan and passes in a fresh clone the moment an operator supplies the file.
+/// It also keeps `okf-scan`'s own contract -- the terms are "supplied by the
+/// caller and never shipped" -- rather than working around it.
+///
+/// Returns how many terms were supplied. The terms themselves are never
+/// returned or printed from here: a count is a gate, a list is a disclosure.
+///
+/// # Errors
+///
+/// Fails when the variable is unset or empty, when the file it names cannot
+/// be read, and when the file holds no term.
+pub fn check_deny_list_supplied() -> Result<usize, ManifestError> {
+    check_deny_list_at(&std::env::var(DENY_LIST_ENV).unwrap_or_default())
+}
+
+/// The same assertion against a named path, so it can be tested without
+/// mutating the environment — this crate forbids `unsafe`, and
+/// `std::env::set_var` is unsafe because a second thread may be reading.
+///
+/// # Errors
+///
+/// Fails when `path` is empty, unreadable, or holds no term.
+pub fn check_deny_list_at(path: &str) -> Result<usize, ManifestError> {
+    let path = path.to_owned();
+    if path.trim().is_empty() {
+        return Err(ManifestError::DenyListUnsupplied);
+    }
+    let text = std::fs::read_to_string(&path).map_err(|source| ManifestError::Read {
+        path: path.clone(),
+        source,
+    })?;
+    let terms = deny_terms(&text);
+    if terms.is_empty() {
+        return Err(ManifestError::DenyListEmpty { path });
+    }
+    Ok(terms.len())
+}
+
+/// The terms a deny list holds: one literal term per line, blank lines and
+/// `#` comments skipped.
+///
+/// `okf-scan --deny` reads its file through this, and so does the assertion
+/// above, so the gate and the scanner cannot disagree about what a non-empty
+/// list is.
+#[must_use]
+pub fn deny_terms(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_owned)
+        .collect()
+}
+
 /// Read `credentials.allow`: one credential name per line, `#` comments.
 ///
 /// # Errors
@@ -507,6 +598,32 @@ mod tests {
         assert!(!is_commit("main"));
         assert!(!is_commit("abc1234"));
         assert!(!is_commit(&"z".repeat(40)));
+    }
+
+    /// A comment-only file is not an armed scan. The count is what the gate
+    /// reads, and it is the only thing this function ever hands back: a
+    /// caller that could print the terms is a caller that could log them.
+    #[test]
+    fn a_deny_list_is_terms_and_not_comments() {
+        assert!(deny_terms("# only a comment\n\n   \n").is_empty());
+        assert_eq!(
+            deny_terms("# the other tenants\nalpha-co\n  beta-co  \n\n"),
+            ["alpha-co", "beta-co"]
+        );
+    }
+
+    /// The gate is on supply. An unset variable is the state every tenant
+    /// was live in, and it has to be the failing one.
+    #[test]
+    fn an_unsupplied_deny_list_is_refused_and_names_the_variable() {
+        let outcome = check_deny_list_at("");
+        assert!(matches!(outcome, Err(ManifestError::DenyListUnsupplied)));
+        let message = outcome.err().map(|err| err.to_string()).unwrap_or_default();
+        assert!(message.contains(DENY_LIST_ENV), "{message}");
+        assert!(
+            !message.contains("credentials.allow"),
+            "the refusal must not send an operator to the wrong file: {message}"
+        );
     }
 
     #[test]

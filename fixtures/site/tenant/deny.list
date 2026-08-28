@@ -1,0 +1,11 @@
+# The fixture tenant's deny list, and the shape a real one has: one literal
+# term per line, `#` comments skipped. These names are invented for this
+# repository's tests and belong to nobody.
+#
+# A real tenant's list is the OTHER tenants, their clients and their host
+# names, it lives on the machine that runs the build, and it is never
+# committed anywhere. This copy is tracked only because the thing it names
+# is fictional and the checks need something to arm the scan with.
+zenith-holdings
+quarry-mutual
+node77

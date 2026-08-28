@@ -21,7 +21,8 @@ use regex::Regex;
 
 use crate::collision::Collision;
 use crate::config::{Confidentiality, Config};
-use crate::frontmatter::{self, Frontmatter, ParseError, parse_strict, unquote};
+use crate::frontmatter::{self, Frontmatter, ParseError, parse_lenient, parse_strict, unquote};
+use crate::index;
 use crate::links::{self, Target};
 use crate::staleness::Day;
 use crate::walk;
@@ -119,7 +120,17 @@ pub fn check_bundle(root: &Path, config: &Config) -> Result<Report, crate::confi
             .into_iter()
             .map(|c| (c.page.clone(), c))
             .collect();
-    for path in walk::markdown_files(root, &config.paths.skip_names) {
+    // Both of these are questions about a *set* of files rather than about
+    // one, so they cannot be answered inside the walk below: the second copy
+    // is only a duplicate once the first has been seen, and which of four
+    // documents numbered 0025 is the offender is not a property any one of
+    // them has. Each returns at most one message per group, attributed to the
+    // first path in the group, so a shelf of fifty identical files spends one
+    // warning and not forty-nine.
+    let pages = walk::markdown_files(root, &config.paths.skip_names);
+    let duplicates = duplicate_content(root, &pages);
+    let renumbers = duplicate_series_numbers(root, &pages);
+    for path in pages {
         let Ok(rel) = path.strip_prefix(root) else {
             continue;
         };
@@ -129,6 +140,12 @@ pub fn check_bundle(root: &Path, config: &Config) -> Result<Report, crate::confi
 
         if let Some(collision) = collisions.get(&name) {
             check_section_collision(&mut report, &name, collision);
+        }
+        if let Some(message) = duplicates.get(&name) {
+            report.warn(&name, message);
+        }
+        if let Some(message) = renumbers.get(&name) {
+            report.warn(&name, message);
         }
 
         match path.file_name().and_then(|n| n.to_str()) {
@@ -162,6 +179,187 @@ pub fn check_bundle(root: &Path, config: &Config) -> Result<Report, crate::confi
         }
     }
     Ok(report)
+}
+
+/// Two files in one bundle holding the same bytes (§5.1).
+///
+/// **One home, and the second place links it.** A copy costs a divergence and
+/// a link costs nothing, and the estate has already paid: one bundle carries
+/// fifty identical `artifacts/README.md` files, and two knowledge repositories
+/// carry byte-identical frozen copies of a script whose upstream fix never
+/// reached either of them.
+///
+/// A warning rather than an error, and deliberately. Which copy is the home is
+/// a judgement about the two directories -- §7.1's routing predicate answers
+/// it, this function cannot -- and `okf-promote` writes sanctioned copies that
+/// are recorded in both halves. So the tool reports the pair and a person
+/// decides, with `max_warnings` giving that report teeth.
+///
+/// **Its reach is one bundle, and the failure it least covers is the
+/// cross-repository one.** Two copies in two repositories are worse than two
+/// in one -- separate histories, separate reviewers, separate gates, and no
+/// single walk that sees both -- and no per-bundle check can see that. §5.1
+/// says so; this is the half that is mechanical.
+///
+/// Content is compared after trimming, so a trailing newline is not a
+/// difference, and an empty file is not a duplicate of every other empty file.
+/// The comparison is over the whole file, front matter included: two documents
+/// with the same body and different titles have diverged already, and saying
+/// so would be this check guessing at which difference is the meaningful one.
+fn duplicate_content(root: &Path, pages: &[std::path::PathBuf]) -> BTreeMap<String, String> {
+    let mut by_content: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for path in pages {
+        let Ok(rel) = path.strip_prefix(root) else {
+            continue;
+        };
+        let text = walk::read_lossy(path).trim().to_owned();
+        if text.is_empty() {
+            continue;
+        }
+        by_content
+            .entry(text)
+            .or_default()
+            .push(crate::walk::to_posix(rel));
+    }
+    let mut found = BTreeMap::new();
+    for mut copies in by_content.into_values() {
+        if copies.len() < 2 {
+            continue;
+        }
+        copies.sort();
+        let (first, rest) = copies.split_at(1);
+        let message = format!(
+            "identical in content to {} (§5.1: one home, and the second place links it)",
+            naming(rest)
+        );
+        found.insert(first[0].clone(), message);
+    }
+    found
+}
+
+/// Two documents of one type sharing a number in one series (§4.2).
+///
+/// **The unit is the series, the series is the `type`, and the tree is
+/// recursive.** Both halves of that are load-bearing and the estate proves
+/// each. Keyed on the directory alone, the check permits an active plan and
+/// its own archived predecessor to share a number, which is the case the rule
+/// was written for. Keyed on the tree alone, it fires across five bundles on
+/// arrival, almost every hit being the arithmetic of a merge this estate
+/// ratified: one `plans/` tree holding `Work Item` documents and an
+/// `archive/` of `Execution Plan` documents, each series internally unique.
+///
+/// The series root is the topmost ancestor that still numbers files, so
+/// `plans/` and `plans/archive/` are one tree and the `type` is what tells the
+/// two series inside it apart.
+///
+/// A warning, so it lands inside the `max_warnings` budget: a shared number is
+/// a readability defect, not a non-conformance, and failing a build over one
+/// would be the wrong instrument.
+fn duplicate_series_numbers(root: &Path, pages: &[std::path::PathBuf]) -> BTreeMap<String, String> {
+    // Every directory that numbers anything, so a series root can be found by
+    // walking up while the answer is still yes.
+    let mut numbering: BTreeSet<String> = BTreeSet::new();
+    let mut numbered: Vec<(String, String, String, String)> = Vec::new();
+    for path in pages {
+        let Ok(rel) = path.strip_prefix(root) else {
+            continue;
+        };
+        let name = crate::walk::to_posix(rel);
+        let Some(number) = numeric_prefix(&name) else {
+            continue;
+        };
+        let dir = name
+            .rsplit_once('/')
+            .map_or(String::new(), |(d, _)| d.to_owned());
+        numbering.insert(dir.clone());
+        let ctype = parse_lenient(&walk::read_lossy(path))
+            .0
+            .get_unquoted("type");
+        numbered.push((name, dir, number, ctype));
+    }
+
+    let mut by_series: BTreeMap<(String, String, String), Vec<String>> = BTreeMap::new();
+    for (name, dir, number, ctype) in numbered {
+        by_series
+            .entry((series_root(&dir, &numbering), ctype, number))
+            .or_default()
+            .push(name);
+    }
+
+    let mut found = BTreeMap::new();
+    for ((series, ctype, number), mut group) in by_series {
+        if group.len() < 2 {
+            continue;
+        }
+        group.sort();
+        let (first, rest) = group.split_at(1);
+        let shelf = if series.is_empty() {
+            "the bundle root".to_owned()
+        } else {
+            format!("`{series}`")
+        };
+        let kind = if ctype.is_empty() {
+            "untyped".to_owned()
+        } else {
+            format!("`{ctype}`")
+        };
+        found.insert(
+            first[0].clone(),
+            format!(
+                "number {number} is also used by {} in the {kind} series under {shelf} \
+                 (§4.2: a number is unique within its series)",
+                naming(rest)
+            ),
+        );
+    }
+    found
+}
+
+/// The zero-padded number a filename opens with, if it opens with one.
+fn numeric_prefix(name: &str) -> Option<String> {
+    let stem = name.rsplit_once('/').map_or(name, |(_, file)| file);
+    let digits: String = stem.chars().take_while(char::is_ascii_digit).collect();
+    if digits.is_empty() || !stem[digits.len()..].starts_with('-') {
+        return None;
+    }
+    Some(digits)
+}
+
+/// The topmost ancestor of `dir` that still numbers files.
+///
+/// `plans/archive` climbs to `plans` because `plans/` numbers files too, and
+/// stops there because the bundle root does not. That is what puts an active
+/// plan and its archived predecessor in one series without dragging every
+/// numbered directory in the bundle into it.
+fn series_root(dir: &str, numbering: &BTreeSet<String>) -> String {
+    let mut best = dir.to_owned();
+    loop {
+        let parent = match best.rsplit_once('/') {
+            Some((parent, _)) => parent.to_owned(),
+            // The bundle root is the last parent there is, and it is only a
+            // series root when it numbers files itself.
+            None if best.is_empty() => break,
+            None => String::new(),
+        };
+        if !numbering.contains(&parent) {
+            break;
+        }
+        best = parent;
+    }
+    best
+}
+
+/// The other members of a group, named without printing a wall of paths.
+fn naming(rest: &[String]) -> String {
+    let shown: Vec<String> = rest.iter().take(3).map(|p| format!("`{p}`")).collect();
+    if rest.len() > shown.len() {
+        return format!(
+            "{} and {} more",
+            shown.join(", "),
+            rest.len().saturating_sub(shown.len())
+        );
+    }
+    shown.join(", ")
 }
 
 /// No link leaves the bundle.
@@ -556,19 +754,45 @@ fn check_index(report: &mut Report, path: &str, text: &str, is_root: bool, confi
         body = &stripped;
     }
 
+    // The heading is the file's, not the listing's, so it is asked of the
+    // whole body. Everything below asks about entry format, which is a
+    // question about the generated listing alone.
     if !SECTION_HEADING.is_match(body) {
         report.err(path, "index.md has no section heading (§8)");
     }
-    let has_entries = INDEX_ENTRY.is_match(body);
-    if INDEX_BULLET.is_match(body) && !has_entries {
+    let listing = listing_scope(body);
+    let has_entries = INDEX_ENTRY.is_match(&listing);
+    if INDEX_BULLET.is_match(&listing) && !has_entries {
         report.err(
             path,
             "index.md entries must be `* [Title](path) - description` (§8)",
         );
     }
-    if body.lines().any(|line| line.starts_with("- ")) {
+    if listing.lines().any(|line| line.starts_with("- ")) {
         report.err(path, "index.md entries use `*`, not `-` (§8)");
     }
+}
+
+/// The text §8's entry-format rules are about.
+///
+/// §8 governs the *listing*, and §10.6 requires a hand-written lead above it,
+/// so a bullet an author writes in that lead is prose and not a malformed
+/// entry. Reading the whole file made those two sections contradict each
+/// other, and one migration rewrote eighteen legitimate sentences to settle
+/// the argument in the checker's favour.
+///
+/// The block is [`index::generated_blocks`] — the generator's own definition,
+/// asked for rather than re-matched. A file that carries no block at all
+/// yields its whole body: with no markers there is nothing to tell a lead from
+/// a listing, so the pre-existing reading stands, and a hand-maintained
+/// listing keeps the gate it has always had rather than escaping it by
+/// deleting two comments.
+fn listing_scope(body: &str) -> String {
+    let blocks = index::generated_blocks(body);
+    if blocks.is_empty() {
+        return body.to_owned();
+    }
+    blocks.join("\n")
 }
 
 /// A `README.md` in a bundle that has retired the name.
@@ -838,5 +1062,48 @@ mod tests {
             &Config::default(),
         );
         assert!(report.errors.iter().any(|e| e.contains("`*`, not `-`")));
+    }
+
+    /// Four cases the scoping has to separate, in one place.
+    ///
+    /// The lead one is the defect: §10.6 puts hand-written prose above the
+    /// markers and §8's entry format has nothing to say about it. The near
+    /// marker is the reason the generator's exact constant is used and not the
+    /// `<!-- BEGIN OKF INDEX` prefix a template matches on: a sentence naming
+    /// the prefix must not open a block, or the bullet after it is judged as
+    /// an entry.
+    #[test]
+    fn entry_format_is_judged_inside_the_generated_block_and_nowhere_else() {
+        let dashed = |text: &str| {
+            let mut report = Report::default();
+            check_index(&mut report, "index.md", text, false, &Config::default());
+            report.errors
+        };
+        let block = |body: &str| format!("{}\n{body}\n{}", index::BEGIN, index::END);
+
+        let lead = format!(
+            "# D\n\n- a hand-written bullet\n\n{}\n",
+            block("* [T](p.md) - d")
+        );
+        assert!(dashed(&lead).is_empty(), "{:?}", dashed(&lead));
+
+        let inside = format!("# D\n\n{}\n", block("- [T](p.md) - d"));
+        assert!(dashed(&inside).iter().any(|e| e.contains("`*`, not `-`")));
+
+        let near = format!(
+            "# D\n\nthe block opens at `<!-- BEGIN OKF INDEX`.\n\n- prose\n\n{}\n",
+            block("* [T](p.md) - d")
+        );
+        assert!(dashed(&near).is_empty(), "{:?}", dashed(&near));
+
+        // Bundle-root frontmatter is stripped before the markers are looked
+        // for, so a root index is scoped like any other.
+        let mut report = Report::default();
+        let root = format!(
+            "---\nokf_version: \"0.2\"\n---\n\n# D\n\n- a lead bullet\n\n{}\n",
+            block("* [T](p.md) - d")
+        );
+        check_index(&mut report, "index.md", &root, true, &Config::default());
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
     }
 }

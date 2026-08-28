@@ -780,10 +780,89 @@ for path in ("alpha/decisions/0001-pick-a-thing/index.html", "beta/notes/shared-
     if "okf-siblings" in read(path):
         fail(f"{path} renders a sibling nav for a page with nothing to step to")
 
+# --- The A1/B2 cancellation, both directions. A generated block whose
+# href set equals `.Pages` but which carries a heading okf-index put
+# there — month grouping — must fall back, or the months are thrown away
+# on a green build with no gate anywhere the wiser. The fixture's
+# /alpha/meetings/ links exactly the three pages Hugo knows about under
+# two month headings, so set equality alone passes and only the heading
+# guard fires.
+#
+# Two fixtures, not one, because the obvious form of the guard is wrong.
+# okf-index writes `## Sections` in every listing that has subdirectories,
+# so a guard reading "the block contains an <h2>" would switch the built
+# navigation off across the estate. /alpha/mixed/ is that case and it is
+# asserted above, in `replaced`, to still take the built navigation; here
+# it is asserted that its block really did carry the heading, or the pair
+# proves nothing.
+meetings = read("alpha/meetings/index.html")
+body = section_body(meetings, "/alpha/meetings/")
+if "<!-- BEGIN OKF INDEX" not in body or "<!-- END OKF INDEX -->" not in body:
+    fail("the month-grouped section lost its generated markers; a heading okf-index wrote is not reproducible and must fall back")
+if 'class="okf-nav"' in body:
+    fail("the month-grouped section built its own navigation; the month headings are gone from the page")
+months = re.findall(r"<h2[^>]*>(.*?)</h2>", body, re.S)
+if [m.strip() for m in months] != ["2026-01", "2026-02"]:
+    fail(f"the month-grouped block published {months}, not its two month headings")
+
+mixed_src = open(f"{site}/content/alpha/mixed/_index.md", encoding="utf-8").read()
+if "## Sections" not in mixed_src:
+    fail("the mixed fixture no longer carries a `## Sections` sub-block; the guard's exemption is untested")
+mixed_nav = nav_of(section_body(read("alpha/mixed/index.html"), "/alpha/mixed/"), "/alpha/mixed/")
+if "Sections" not in mixed_nav:
+    fail("the mixed section took the built navigation but rendered no Sections heading")
+
+# --- Lateral movement at a section, symmetric with the leaf. A section
+# lists its children and never its peers, so without this a reader at
+# /alpha/mixed/deep/ reaches /alpha/mixed/guides/ only by going up.
+peers = re.search(r'<nav class="okf-peers"(.*?)</nav>', read("alpha/mixed/deep/index.html"), re.S)
+if not peers:
+    fail("/alpha/mixed/deep/ renders no peer strip; a section with two or more siblings must offer them")
+peers = peers.group(0)
+if "data-pagefind-ignore" not in peers:
+    fail("the peer strip is not data-pagefind-ignore'd; a section's neighbours are not its content")
+if sorted(entries(peers)) != ["/alpha/mixed/guides/", "/alpha/mixed/spare/"]:
+    fail(f"the peer strip links {sorted(entries(peers))}, not the two sections beside deep/")
+if 'aria-current="page"' not in peers:
+    fail("the peer strip links the section it is on instead of marking it")
+
+# Suppressed at a bundle root, where the peers are other bundles and
+# moving between bundles is the front door's job. Watched failing with
+# the `.IsHome` guard dropped: /alpha/ grew a strip listing /beta/.
+if "okf-peers" in read("alpha/index.html"):
+    fail("a bundle root renders a peer strip; its siblings are other bundles")
+
+# --- The llms.txt H1. OKF §8 means a section has no title, so `.Title`
+# opened every section's reading list with a bare `# ` — the first line
+# an agent reads. Asserted over every llms.txt the build published, not
+# a sample, because the fix is one line and its blast radius is all of
+# them.
+bare = [
+    path
+    for path in glob.glob(f"{site}/public/**/llms.txt", recursive=True)
+    if open(path, encoding="utf-8").readline().strip() == "#"
+]
+if bare:
+    fail(f"{len(bare)} llms.txt files open with a bare heading: {sorted(bare)[:3]}")
+
+# --- The acronym table. `humanize` title-cases, which is right for
+# `archive` and wrong for `adr`. The table is a lookup on the whole
+# directory name and it has to reach every place the title region does:
+# the H1, the breadcrumb, the parent's listing entry and llms.txt.
+if h1s(read("alpha/adr/index.html")) != ["ADR"]:
+    fail(f"the acronym section's H1 is {h1s(read('alpha/adr/index.html'))}, not ADR")
+if open(f"{site}/public/alpha/adr/llms.txt", encoding="utf-8").readline().strip() != "# ADR":
+    fail("the acronym section's llms.txt heading did not go through the title region")
+if ">ADR<" not in read("alpha/adr/0001-record-the-acronym/index.html"):
+    fail("the acronym did not reach the leaf page's breadcrumb")
+
 print(
     f"the navigation pass holds: {len(replaced)} replaced sections match "
     "their blocks, 2 divergent sections keep them verbatim, every crumb "
     "agrees with its H1, both folds fire past 20 and stay open at 20, one "
-    f"search mount per page over {len(pages)} pages, and every sibling "
-    "href resolves"
+    f"search mount per page over {len(pages)} pages, every sibling href "
+    "resolves, the month-grouped block survives verbatim while the "
+    "`## Sections` one does not, the peer strip renders below a section "
+    "and not at a bundle root, no llms.txt opens with a bare heading, and "
+    "`adr` reads ADR"
 )

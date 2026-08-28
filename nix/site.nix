@@ -9,7 +9,10 @@
 #      revs. A verified pin is the pinned corpus, so no page is stamped
 #      "local build"; that stamp is `--local`'s, for a working tree standing
 #      in for the pin on somebody's laptop.
-#   2. `okf-scan content`;
+#   2. `okf-scan .` over the assembled site root with `public/` excluded and
+#      the caller's `--deny` list, which is the justfile's step 2 exactly:
+#      `content` alone never reads `static/` or `layouts/`, and those are the
+#      shared assets that publish;
 #   3. `hugo`;
 #   4. `okf-assemble --verify-raw`;
 #   5. `pagefind --site public`.
@@ -36,11 +39,20 @@
 # The output is the rendered site root itself — `public/`'s contents — which
 # is the contract `dotfiles`' okfSite module already reads:
 # `root = input.packages.${system}.site`.
+# `denyList` is a path to the caller's `okf-scan --deny` file: one term per
+# line, the other tenants and their clients and hosts. It is an argument and
+# not a file in any repository, because three of the four site repositories
+# are controlled by a client and a tracked roster is the disclosure the list
+# exists to prevent. A tenant supplies it from the machine that runs the
+# build. Omitting it is not a quiet degradation: `okf-assemble` refuses a
+# build whose scan was not armed, so the derivation goes red naming the
+# variable.
 {
   pkgs,
   okf,
   manifestDir,
   sources,
+  denyList ? null,
 }: let
   inherit (pkgs) lib;
   manifest = builtins.fromTOML (builtins.readFile (manifestDir + "/site.toml"));
@@ -76,8 +88,11 @@ in
       install -m 644 ${manifestDir}/credentials.allow "$site/credentials.allow"
     ''}
     cd "$site"
+    ${lib.optionalString (denyList != null) ''
+      export OKF_SCAN_DENY=${denyList}
+    ''}
     okf-assemble ${pinnedFlags}
-    okf-scan content
+    okf-scan . --exclude public --deny "$OKF_SCAN_DENY"
     hugo
     okf-assemble --verify-raw
     pagefind --site public

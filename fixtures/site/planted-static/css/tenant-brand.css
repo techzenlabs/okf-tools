@@ -1,0 +1,13 @@
+/* A tenant's own stylesheet overlay, planted with another tenant's name.
+   This is the fixture for the leak `okf-scan content` could not see: a file
+   under `static/`, which Hugo byte-copies into `public/`, so the comment
+   below is served to every reader of this site.
+
+   The name is invented for this repository and belongs to nobody. It is the
+   first term in fixtures/site/tenant/deny.list, which is what makes the
+   planted build go red.
+
+   Reported when the migration from zenith-holdings finished. */
+.okf-brand {
+  color: #333;
+}

@@ -242,6 +242,22 @@ static MARKED_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
     ))
 });
 
+/// Every marker-delimited region in `text`, markers included.
+///
+/// The generator rewrites exactly these regions, so this is what "inside the
+/// generated block" means, and `okf-check` scopes §8's entry-format rules by
+/// calling it rather than by matching the markers a second time. A marker
+/// convention spelt twice drifts, and the checker is the half that would then
+/// fail a file the generator had just written.
+///
+/// Empty when the file carries no block — a hand-maintained listing, or one
+/// this generator has not reached yet — which the caller decides what to do
+/// about.
+#[must_use]
+pub fn generated_blocks(text: &str) -> Vec<&str> {
+    MARKED_BLOCK.find_iter(text).map(|m| m.as_str()).collect()
+}
+
 /// The marker-delimited region, collapsed when there is nothing to list so it
 /// does not lint as a run of blank lines.
 fn block(generated: &str) -> String {

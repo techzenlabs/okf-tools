@@ -83,6 +83,8 @@ fn conformance_fixture_reports_exactly_the_expected_diagnostics() {
     assert_eq!(
         report.errors,
         [
+            "bad-index-block-dash/index.md: index.md entries must be `* [Title](path) - description` (§8)",
+            "bad-index-block-dash/index.md: index.md entries use `*`, not `-` (§8)",
             "bad-index-dash/index.md: index.md entries must be `* [Title](path) - description` (§8)",
             "bad-index-dash/index.md: index.md entries use `*`, not `-` (§8)",
             "bad-index-frontmatter/index.md: index.md may only carry frontmatter at the bundle root (§8)",
@@ -96,7 +98,27 @@ fn conformance_fixture_reports_exactly_the_expected_diagnostics() {
             "concepts/tab-indent.md: line 3: tab indentation is not valid YAML",
         ]
     );
-    assert_eq!(report.checked, 22);
+    assert_eq!(report.checked, 24);
+}
+
+/// §8 judges the generated listing, and §10.6 puts hand-written prose above
+/// it, so a bullet in that prose is not a malformed entry.
+///
+/// The fixture carries what the two sections together permit and the checker
+/// used to refuse: a `- ` bullet in the lead, a sentence naming
+/// `<!-- BEGIN OKF INDEX` that is prose and not a marker, a second bullet
+/// after it, and a correct generated block below. Before the block-scoping it
+/// reported the star-not-dash error against that lead, and a migration rewrote
+/// eighteen real sentences in one bundle to silence it. Its counterpart is
+/// `bad-index-block-dash`, above: a dash entry *inside* the block still fails,
+/// which is what keeps this a narrowing rather than a removal.
+#[test]
+fn a_hand_written_bullet_above_the_markers_is_prose_and_not_an_entry() {
+    let (root, config) = load("conformance");
+    let report = check::check_bundle(&root, &config).unwrap_or_default();
+    for finding in report.errors.iter().chain(report.warnings.iter()) {
+        assert!(!finding.contains("good-index-lead"), "{finding}");
+    }
 }
 
 /// §8's URL collision, and the two shapes that look like it and are not.
@@ -1285,4 +1307,85 @@ fn verified_does_not_survive_promotion() {
     assert!(proposal.draft.contains("promoted_from"));
 
     let _ = std::fs::remove_dir_all(destination.root.parent().unwrap_or(&destination.root));
+}
+
+/// A number is unique within its series, and the series is the `type`.
+///
+/// Two readings of §4.2 are both wrong and the fixture holds both. Keyed on
+/// the directory alone, an active plan and its own archived predecessor may
+/// share a number, which is the case the rule exists for. Keyed on the tree
+/// alone, `plans/0001` (a `Work Item`) and `plans/archive/0001` (an
+/// `Execution Plan`) collide — and that pairing is the arithmetic of a merge
+/// this estate ratified, so a check reporting it would fire on arrival across
+/// five bundles and be switched off. Both are asserted here, in both
+/// directions.
+#[test]
+fn a_shared_number_is_a_warning_per_series_and_a_ratified_merge_is_not() {
+    let (root, config) = load("series");
+    let report = check::check_bundle(&root, &config).unwrap();
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+
+    let shared: Vec<&String> = report
+        .warnings
+        .iter()
+        .filter(|w| w.contains("is also used by"))
+        .collect();
+    assert_eq!(shared.len(), 2, "{:?}", report.warnings);
+
+    // One warning per group, on the first path in order, naming the other.
+    let plans = shared
+        .iter()
+        .find(|w| w.starts_with("plans/archive/0016-carrier-delivery.md:"))
+        .unwrap_or_else(|| unreachable!("the 0016 pair reported no warning: {shared:?}"));
+    assert!(plans.contains("0016-interface-note.md"), "{plans}");
+    assert!(plans.contains("`Execution Plan`"), "{plans}");
+    // The series root is the tree, not the directory: `plans/archive` climbs
+    // to `plans`, which is what puts a live plan and its archived predecessor
+    // in one series.
+    assert!(plans.contains("under `plans`"), "{plans}");
+
+    let decisions = shared
+        .iter()
+        .find(|w| w.starts_with("decisions/0025-first-record.md:"))
+        .unwrap_or_else(|| unreachable!("the 0025 pair reported no warning: {shared:?}"));
+    assert!(decisions.contains("0025-second-record.md"), "{decisions}");
+
+    // The ratified merge, reported as clean. Two documents numbered 0001 in
+    // one tree, of two types, are two series and not a collision.
+    assert!(
+        !report.warnings.iter().any(|w| w.contains("number 0001")),
+        "the two 0001 documents are different types and must not collide: {:?}",
+        report.warnings
+    );
+}
+
+/// Two files in one bundle holding the same bytes (§5.1).
+///
+/// One warning for the group rather than one per copy: the real shape of this
+/// is fifty identical `artifacts/README.md` files in one bundle, and
+/// forty-nine warnings is a budget spent on one finding.
+#[test]
+fn two_files_with_the_same_content_are_one_warning_naming_both() {
+    let (root, config) = load("series");
+    let report = check::check_bundle(&root, &config).unwrap();
+
+    let copies: Vec<&String> = report
+        .warnings
+        .iter()
+        .filter(|w| w.contains("identical in content to"))
+        .collect();
+    assert_eq!(copies.len(), 1, "{:?}", report.warnings);
+    assert!(
+        copies[0].starts_with("notes/first-copy.md:"),
+        "the finding lands on the first path in order: {copies:?}"
+    );
+    assert!(copies[0].contains("notes/second-copy.md"), "{copies:?}");
+
+    // The negative control that says the comparison is over content and not
+    // over shape: the generated `index.md` files in this bundle differ only
+    // by their heading, and they must not be reported.
+    assert!(
+        !copies[0].contains("index.md"),
+        "an index.md pair was called a duplicate: {copies:?}"
+    );
 }

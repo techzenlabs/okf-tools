@@ -86,7 +86,34 @@
     {{- end }}
     {{- $want := slice }}
     {{- range .Pages }}{{ $want = $want | append .RelPermalink }}{{ end }}
-    {{- if and $got $want (eq (delimit (uniq (sort $got)) "\n") (delimit (uniq (sort $want)) "\n")) }}
+    {{- /* A heading okf-index put inside the markers that this template
+           cannot reproduce. Set equality over hrefs is blind to it: a
+           `group_by_month` block links exactly the pages Hugo knows about,
+           under month headings the built navigation has no idea about, so
+           the proof passes and the replacement throws the months away —
+           A1/B2, and no gate anywhere notices because the build is green
+           and the output is merely wrong.
+
+           The clause is `an <h2> whose text is not "Sections"`, and the
+           obvious form of it is wrong: okf-index emits `## Sections` in
+           every listing that has subdirectories, so a guard reading "the
+           block contains an <h2>" would switch the built navigation off
+           across the whole estate. The heading this template writes itself
+           is the one heading that does not count against it.
+
+           Stated rather than buried: this makes the built navigation
+           switchable off by any future generated heading inside the
+           markers. okf-index is the only writer in there today, so the
+           risk is bounded by a program this estate controls — and the
+           alternative, teaching this template to reproduce month grouping,
+           has a layout deriving a policy `okf.toml` already states. */}}
+    {{- $foreign := false }}
+    {{- range findRE `(?s)<h2[^>]*>.*?</h2>` $block }}
+      {{- if ne (strings.TrimSpace (plainify .)) "Sections" }}
+        {{- $foreign = true }}
+      {{- end }}
+    {{- end }}
+    {{- if and $got $want (not $foreign) (eq (delimit (uniq (sort $got)) "\n") (delimit (uniq (sort $want)) "\n")) }}
       {{- $head = index $outer 0 }}
       {{- $tail = index $inner 1 }}
       {{- $docs = sort (where .Pages "Kind" "page") "RelPermalink" }}
@@ -140,6 +167,68 @@
   {{- end }}
   {{- end }}
 </section>
+{{- /* Lateral movement at a section, symmetric with the leaf's (A7).
+       A section page lists its children and never its peers, so a reader
+       at one runbooks tree could reach the compliance one only by going
+       up — the same round trip through the parent that the leaf nav
+       exists to remove, one level higher.
+
+       Suppressed at a bundle root, where `.Parent` is the home page: a
+       bundle root's peers are other bundles, and moving between bundles
+       is the front door's job. Two or more, because a strip of one is the
+       page it is on. Folded past the same 20 `list.html` and
+       `single.html` already fold at, so all three folds fire at one
+       scale. `data-pagefind-ignore` for the reason every other nav here
+       carries it. */}}
+{{- $here := . }}
+{{- $peers := slice }}
+{{- with .Parent }}
+  {{- if not .IsHome }}
+    {{- $peers = sort .Sections "RelPermalink" }}
+  {{- end }}
+{{- end }}
+{{- if ge (len $peers) 2 }}
+{{- $up := .Parent }}
+<nav class="okf-peers" data-pagefind-ignore aria-label="Sections alongside this one">
+  <h2 class="okf-sib-heading">In <a href="{{ $up.RelPermalink }}">{{ partial "okf-meta.html" (dict "page" $up "region" "title") }}</a></h2>
+  {{- $n := len $peers }}
+  {{- if gt $n 20 }}
+  <details class="okf-fold">
+    <summary>{{ $n }} sections</summary>
+    {{- partial "okf-peer-items.html" (dict "pages" $peers "cur" $here) }}
+  </details>
+  {{- else }}
+  {{- partial "okf-peer-items.html" (dict "pages" $peers "cur" $here) }}
+  {{- end }}
+</nav>
+{{- end }}
+{{ end }}
+
+{{- /*
+  The peer strip's items, once, so the open form and the folded form build
+  the same entries. It is `single.html`'s sibling list one level up and it
+  is deliberately a second definition rather than a shared one: an inline
+  partial belongs to the template that defines it, and a section entry
+  carries a recursive page count that a document entry does not.
+
+  The section the reader is on is a marked span and never a self-link —
+  `aria-current` is the accessible "you are here", and a link to the page
+  it is on is a reader trap.
+*/ -}}
+{{ define "partials/okf-peer-items.html" }}
+<ul class="okf-listing okf-sib-list">
+  {{- range .pages }}
+  {{- $count := len .RegularPagesRecursive }}
+  <li>
+    {{- if .Eq $.cur }}
+    <span class="okf-sib-here" aria-current="page">{{ partial "okf-meta.html" (dict "page" . "region" "title") }}</span>
+    {{- else }}
+    <a href="{{ .RelPermalink }}">{{ partial "okf-meta.html" (dict "page" . "region" "title") }}</a>
+    {{- end }}
+    <span class="okf-nav-count">{{ $count }} page{{ if ne $count 1 }}s{{ end }}</span>
+  </li>
+  {{- end }}
+</ul>
 {{ end }}
 
 {{- /*
