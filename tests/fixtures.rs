@@ -1357,6 +1357,19 @@ fn a_shared_number_is_a_warning_per_series_and_a_ratified_merge_is_not() {
         "the two 0001 documents are different types and must not collide: {:?}",
         report.warnings
     );
+
+    // §4.3's two dated forms, both reported as clean. `evidence/` holds two
+    // files written on 2026-07-08 and `release/` holds two release notes a day
+    // apart; read as series numbers they are `20260708` shared twice and
+    // `2026` shared twice, which is what `ria-gateway-vna` reported.
+    assert!(
+        !report
+            .warnings
+            .iter()
+            .any(|w| w.contains("number 20260708") || w.contains("number 2026 is")),
+        "a date was read as a series number: {:?}",
+        report.warnings
+    );
 }
 
 /// Two files in one bundle holding the same bytes (§5.1).
@@ -1387,5 +1400,16 @@ fn two_files_with_the_same_content_are_one_warning_naming_both() {
     assert!(
         !copies[0].contains("index.md"),
         "an index.md pair was called a duplicate: {copies:?}"
+    );
+
+    // The scaffold's output, reported as clean. `packs/one` and `packs/two`
+    // carry byte-identical `artifacts/notes.md` and `artifacts/index.md`
+    // files, which is `gill-logistics/reporting-system`'s shape at seventy-
+    // seven packs. Neither says anything its own front matter or its
+    // generated block does not, so neither is a second home.
+    assert!(
+        !report.warnings.iter().any(|w| w.starts_with("packs/")),
+        "a scaffolded stub was called a duplicate: {:?}",
+        report.warnings
     );
 }
