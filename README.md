@@ -244,7 +244,8 @@ a `sha256`, `digest`, `byte_length`, `size` or `length` key is reported as a
 possible byte pin, and the whole batch is left unchanged until somebody
 decides what that binding should cover. The scan is a textual
 preflight. It reports possible bindings rather than claiming to understand
-every manifest format.
+every manifest format. All modes must run inside a Git worktree because even
+the read-only report consults the index.
 
 The rename table is data in `okf.toml`, because the names being retired belong
 to the bundle rather than to the tool:

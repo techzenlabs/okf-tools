@@ -15,7 +15,7 @@
 //! [`okf_tools::retype`].
 
 use std::io::Read as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use okf_tools::config::Config;
@@ -63,10 +63,11 @@ fn run() -> anyhow::Result<ExitCode> {
 
     let cwd = std::env::current_dir()?;
     let (root, config) = okf_tools::open_bundle(&cwd)?;
+    let repo_root = git_toplevel(&cwd)?;
     if args.iter().any(|a| a == "--retype") {
-        return retype_run(&cwd, &root, &config, &prefixes, apply, dry_run);
+        return retype_run(&repo_root, &root, &config, &prefixes, apply, dry_run);
     }
-    migrate_run(&cwd, &root, &config, &prefixes, apply, dry_run)
+    migrate_run(&repo_root, &root, &config, &prefixes, apply, dry_run)
 }
 
 /// The migration pass: write the frontmatter a bundle has not got.
@@ -279,6 +280,26 @@ fn retype_run(
 /// Refuse to buffer an arbitrarily large tracked file for a textual preflight.
 const MAX_TRACKED_TEXT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_TRACKED_TEXT_TOTAL_BYTES: usize = 256 * 1024 * 1024;
+
+fn git_toplevel(invocation_root: &Path) -> anyhow::Result<PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(invocation_root)
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git rev-parse --show-toplevel failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let path = std::str::from_utf8(&output.stdout)
+        .map_err(|_| anyhow::anyhow!("git reported a repository root that is not UTF-8"))?
+        .trim_end_matches(['\r', '\n']);
+    if path.is_empty() {
+        anyhow::bail!("git reported an empty repository root");
+    }
+    Ok(PathBuf::from(path))
+}
 
 /// Current contents of Git-tracked files that are not Markdown documents.
 fn tracked_non_markdown(repo_root: &Path) -> anyhow::Result<Vec<(String, String)>> {

@@ -177,6 +177,38 @@ fn a_tracked_digest_reference_refuses_the_batch_before_any_write() {
 }
 
 #[test]
+fn a_manifest_above_a_nested_bundle_refuses_the_batch() {
+    let root = Scratch::new("nested-pinned-document");
+    let bundle = root.path().join("bundle");
+    std::fs::create_dir(&bundle).expect("bundle directory should be created");
+    write(
+        &bundle.join("okf.toml"),
+        "config_version = 1\nbundle_root = \".\"\n\n[[type_rules]]\npath = \"**/*.md\"\ntype = \"Reference\"\n",
+    );
+    let pinned = "# Pinned\n\nPinned prose.\n";
+    write(&bundle.join("pinned.md"), pinned);
+    write(
+        &root.path().join("model-manifest.json"),
+        "{\n  \"path\": \"bundle/pinned.md\",\n  \"sha256\": \"fixture\"\n}\n",
+    );
+    track_all(root.path());
+
+    let output = run(&bundle);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(!output.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("pinned.md <- model-manifest.json:2 (sha256 at line 3)"),
+        "{stdout}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(bundle.join("pinned.md"))
+            .expect("pinned fixture should be readable"),
+        pinned
+    );
+}
+
+#[test]
 fn markdown_and_untracked_digest_references_do_not_block_migration() {
     let root = Scratch::new("untracked-pin");
     write(

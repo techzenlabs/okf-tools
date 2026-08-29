@@ -791,13 +791,17 @@ mod tests {
 
     #[test]
     fn distant_or_non_key_length_words_do_not_report_a_pin() {
-        let mut distant = String::from("length: 84\n");
-        distant.push_str(&"context\n".repeat(PIN_CONTEXT_LINES + 1));
-        distant.push_str("adr/0001-db.md\n");
+        let mut at_boundary = String::from("length: 84\n");
+        at_boundary.push_str(&"context\n".repeat(PIN_CONTEXT_LINES - 1));
+        at_boundary.push_str("adr/0001-db.md\n");
+        let mut beyond_boundary = String::from("length: 84\n");
+        beyond_boundary.push_str(&"context\n".repeat(PIN_CONTEXT_LINES));
+        beyond_boundary.push_str("adr/0001-db.md\n");
         let references = pinned_references(
             ["adr/0001-db.md"],
             [
-                ("distant.txt", distant.as_str()),
+                ("boundary.txt", at_boundary.as_str()),
+                ("distant.txt", beyond_boundary.as_str()),
                 (
                     "prose.txt",
                     "adr/0001-db.md has enough length for the example.\n",
@@ -806,7 +810,10 @@ mod tests {
         )
         .unwrap();
 
-        assert!(references.is_empty());
+        assert_eq!(references.len(), 1);
+        assert_eq!(references[0].file, "boundary.txt");
+        assert_eq!(references[0].path_line, PIN_CONTEXT_LINES + 1);
+        assert_eq!(references[0].key_line, 1);
     }
 
     #[test]
