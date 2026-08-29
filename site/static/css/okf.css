@@ -330,6 +330,110 @@ h1, h2, h3 { line-height: 1.25; }
 }
 /* ---- end sibling navigation -------------------------------------------- */
 
+/* ---- The left navigation column (#33) ----------------------------------
+   Everything from here to the closing marker belongs to the standing
+   section tree `baseof.html` mounts beside `<main>`; keep additions to it
+   inside this block.
+
+   Mobile-first: the base rules are the collapsed form, one link-coloured
+   "Sections" control between the breadcrumb and the content, and the
+   column itself hidden until the checkbox before `.okf-shell` is checked.
+   No script anywhere: the checkbox is the toggle, `<details>` is the tree.
+   At 900px and up the toggle disappears, the shell becomes a two-column
+   grid, and the column is always on — sticky, scrolling inside itself, so
+   a branch with hundreds of pages never scrolls the page sideways or the
+   nav out of reach. */
+.okf-nav-state { display: none; }
+
+.okf-nav-toggle {
+  display: inline-block;
+  cursor: pointer;
+  color: var(--okf-link);
+  font-size: 0.9rem;
+  padding: 0.4rem 0 0.1rem;
+}
+
+.okf-nav-toggle::after { content: " \25B8"; }
+
+.okf-sidenav {
+  display: none;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.okf-nav-state:checked ~ .okf-shell .okf-sidenav {
+  display: block;
+  border-block-end: 1px solid var(--okf-rule);
+  padding-block-end: 0.6rem;
+  margin-block-end: 1rem;
+}
+
+.okf-nav-state:checked ~ .okf-shell .okf-nav-toggle::after { content: " \25BE"; }
+
+/* The tree: no bullets, each open branch indented one step behind a
+   hairline, so depth reads as a column of rules rather than a staircase
+   of markers. */
+.okf-tree,
+.okf-tree ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.okf-tree ul {
+  margin-inline-start: 0.4rem;
+  padding-inline-start: 0.75rem;
+  border-inline-start: 1px solid var(--okf-rule);
+}
+
+.okf-tree li { margin: 0.2rem 0; }
+
+.okf-tree a {
+  color: var(--okf-muted);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.okf-tree a:hover,
+.okf-tree a:focus { color: var(--okf-link); text-decoration: underline; }
+
+.okf-tree summary { cursor: pointer; }
+.okf-tree summary::marker { color: var(--okf-muted); }
+
+/* You are here: marked, never a self-link — the sibling list's rule. */
+.okf-tree-here { font-weight: 600; overflow-wrap: anywhere; }
+
+@media (min-width: 900px) {
+  /* 15rem of column, 2.5rem of gutter, and the content's own 46rem. */
+  body { max-width: 65rem; }
+
+  .okf-shell {
+    display: grid;
+    grid-template-columns: 15rem minmax(0, 46rem);
+    column-gap: 2.5rem;
+    align-items: start;
+  }
+
+  /* The crumb sits outside the shell (it must not join the indexed body),
+     so it does not inherit the grid. Pad its text over to the content
+     column — 15rem of nav plus the 2.5rem gutter — so the trail and the
+     page's first line start at the same edge; the hairline under it stays
+     full width, like the header's. */
+  .okf-crumb { padding-inline-start: 17.5rem; }
+
+  .okf-nav-toggle { display: none; }
+
+  .okf-sidenav {
+    display: block;
+    position: sticky;
+    top: 0;
+    max-height: 100vh;
+    overflow-y: auto;
+    padding-block: 1.2rem 2rem;
+  }
+}
+/* ---- end left navigation column ---------------------------------------- */
+
 /* One card per bundle, and the whole front door. Two columns where there is
    room and one where there is not; a single-bundle tenant gets one card and
    that is the intended spare, because the card's job is to hand the reader to

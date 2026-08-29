@@ -533,11 +533,18 @@ expected_counts = {
     "/alpha/mixed/spare/": "1 page",     # the singular
     "/beta/notes/": "1 page",
 }
+# Searched inside the section's own `okf-nav`, not the whole page: the
+# left navigation column (#33) also links every one of these sections,
+# earlier in the page and without a count, so a whole-page search matched
+# the column's link and then ran forward to some other entry's count.
 for href, want in expected_counts.items():
-    page = read("beta/index.html") if href.startswith("/beta") else mixed
+    if href.startswith("/beta"):
+        section_nav = nav_of(section_body(read("beta/index.html"), "/beta/"), "/beta/")
+    else:
+        section_nav = nav_of(section_body(mixed, "/alpha/mixed/"), "/alpha/mixed/")
     entry = re.search(
         re.escape(f'href="{href}"') + r'.*?<span class="okf-nav-count">([^<]*)</span>',
-        page, re.S,
+        section_nav, re.S,
     )
     if not entry or entry.group(1) != want:
         fail(f"the {href} entry counts {entry.group(1) if entry else 'nothing'}, not {want!r}")
@@ -855,6 +862,83 @@ if open(f"{site}/public/alpha/adr/llms.txt", encoding="utf-8").readline().strip(
     fail("the acronym section's llms.txt heading did not go through the title region")
 if ">ADR<" not in read("alpha/adr/0001-record-the-acronym/index.html"):
     fail("the acronym did not reach the leaf page's breadcrumb")
+
+
+# ---- The standing left navigation column (#33). --------------------------
+# One `<nav class="okf-sidenav">` on every rendered page, before the
+# content region and never inside it, `data-pagefind-ignore`d, and its
+# no-script toggle checkbox a *preceding sibling* of `.okf-shell`, because
+# the `~` selector in okf.css cannot reach the column from anywhere else.
+# Watched failing with the attribute dropped from `baseof.html`: the 404
+# page reported first, and the broken shape was seen in `public/`.
+for path in pages:
+    page = open(path, encoding="utf-8").read()
+    navs = re.findall(r'<nav class="okf-sidenav"[^>]*>', page)
+    if len(navs) != 1:
+        fail(f"{path} carries {len(navs)} left navigation columns, not exactly 1")
+    if "data-pagefind-ignore" not in navs[0]:
+        fail(f"{path}'s left nav lost data-pagefind-ignore; 531 pages of search excerpts would lead with the bundle list")
+    if page.index("okf-sidenav") > page.index("data-pagefind-body"):
+        fail(f"{path}'s left nav renders inside or after the indexed content region")
+    if 'id="okf-nav-state"' not in page or page.index('id="okf-nav-state"') > page.index('class="okf-shell"'):
+        fail(f"{path}'s nav toggle checkbox is not a preceding sibling of .okf-shell; the mobile toggle is dead")
+
+
+def side_nav(page, where):
+    match = re.search(r'<nav class="okf-sidenav".*?</nav>', page, re.S)
+    if not match:
+        fail(f"{where} renders no left navigation column")
+    return match.group(0)
+
+
+# The open state. On the deepest fixture page the branch is open down to
+# the page and nothing else is: four `<details open>`, one for each
+# ancestor section, the page itself a marked span and never a self-link,
+# and the other bundle's branch shipped closed *with its children still
+# in the markup*, because a closed `<details>` a reader can open with
+# JavaScript off is the whole design. Watched failing with the `open`
+# emission removed from `okf-tree.html`: the nav opened 0 branches.
+bottom = read("alpha/mixed/deep/deeper/bottom-page/index.html")
+nav = side_nav(bottom, "the deepest fixture page")
+if nav.count("<details open>") != 4:
+    fail(f"the deep page's nav opens {nav.count('<details open>')} branches, not the 4 ancestors of the page")
+for href in ('href="/alpha/"', 'href="/alpha/mixed/"', 'href="/alpha/mixed/deep/"', 'href="/alpha/mixed/deep/deeper/"'):
+    if href not in nav:
+        fail(f"the deep page's nav is missing its ancestor link {href}")
+if nav.count('aria-current="page"') != 1:
+    fail(f"the deep page's nav marks {nav.count('aria-current=\"page\"')} current pages, not exactly 1")
+if '<span class="okf-tree-here" aria-current="page">Bottom page</span>' not in nav:
+    fail("the deep page is not the marked span in its own nav")
+if 'href="/alpha/mixed/deep/deeper/bottom-page/"' in nav:
+    fail("the deep page links to itself from the left nav; current is a mark, never a self-link")
+if 'href="/beta/notes/"' not in nav:
+    fail("a closed branch ships without its children; with JavaScript off nothing can ever open it")
+
+# Closed on load everywhere else: the home page is inside no bundle, so
+# its column opens nothing, and it still lists every bundle in display-name
+# order, the front door cards' own order.
+home_nav = side_nav(read("index.html"), "the home page")
+if "<details open>" in home_nav:
+    fail("the home page's nav ships a branch open; everything is closed on load")
+if not home_nav.index('href="/alpha/"') < home_nav.index('href="/beta/"'):
+    fail("the home page's nav does not list bundles in display-name order")
+
+# The column's words stay out of the index. Alpha's display title is in
+# the nav on every page of both bundles, so any fragment but /alpha/'s own
+# carrying it means the column leaked past both defences (outside
+# `data-pagefind-body`, and the ignore attribute).
+for path in glob.glob(f"{site}/public/pagefind/fragment/*.pf_fragment"):
+    body = gzip.open(path).read().decode("utf-8", "replace")
+    fragment = json.loads(body.split("pagefind_dcd", 1)[1])
+    if fragment["url"] != "/alpha/" and "Alpha, the first bundle" in fragment["content"]:
+        fail(f"{fragment['url']} indexes the left nav's bundle list")
+
+print(
+    f"the left navigation column holds over {len(pages)} pages: one ignored "
+    "column per page, the deep branch open to the page, everything else "
+    "closed with its children shipped, and no fragment carries the bundle list"
+)
+
 
 print(
     f"the navigation pass holds: {len(replaced)} replaced sections match "
