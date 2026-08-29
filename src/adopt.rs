@@ -163,13 +163,13 @@ pub fn survey_branches(
                     .map(crate::walk::to_posix)
             })
             .collect();
-    let bundle_prefix = repository_bundle_prefix(&config.bundle_root);
+    let bundle_prefix = &config.bundle_root;
     let mut surveys = Vec::new();
 
     for reference in git.remote_refs()? {
         let mut findings = Vec::new();
-        for repo_path in git.markdown_paths(&reference, &bundle_prefix)? {
-            let Some(relative) = bundle_relative(&repo_path, &bundle_prefix) else {
+        for repo_path in git.markdown_paths(&reference, bundle_prefix)? {
+            let Some(relative) = bundle_relative(&repo_path, bundle_prefix) else {
                 continue;
             };
             if current.contains(relative) || is_skipped(relative, &config.paths.skip_names) {
@@ -195,15 +195,6 @@ pub fn survey_branches(
         }
     }
     Ok(surveys)
-}
-
-fn repository_bundle_prefix(bundle_root: &str) -> String {
-    let normalized = bundle_root.trim_start_matches("./").trim_end_matches('/');
-    if normalized.is_empty() {
-        ".".to_owned()
-    } else {
-        normalized.to_owned()
-    }
 }
 
 fn bundle_relative<'path>(repo_path: &'path str, bundle_prefix: &str) -> Option<&'path str> {
