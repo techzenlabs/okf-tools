@@ -43,6 +43,20 @@
             mainProgram = "okf-check";
           };
         };
+        okf-tools-check = okf-tools-unwrapped.overrideAttrs (old: {
+          nativeCheckInputs =
+            (old.nativeCheckInputs or [])
+            ++ [
+              pkgs.rustfmt
+              pkgs.clippy
+            ];
+          postCheck =
+            (old.postCheck or "")
+            + ''
+              cargo fmt --all -- --check
+              cargo clippy --workspace --all-targets --all-features -- -D warnings
+            '';
+        });
         # `okf-assemble` shells out to git, tar and zstd, and copies the
         # mermaid bundle out of a store path. Wrapping is what makes a
         # consumer's install one thing to pin rather than a tool plus a list
@@ -295,8 +309,9 @@
         checks =
           {
             # The fixtures live in the crate's own tests, and building the
-            # package runs them, so this check is the regression suite.
-            okf-tools = okf-tools-unwrapped;
+            # package runs them. The overridden check phase adds the two
+            # source-quality gates that do not belong in the release build.
+            okf-tools = okf-tools-check;
           }
           // siteChecks;
       };
