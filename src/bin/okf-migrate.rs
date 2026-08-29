@@ -83,6 +83,7 @@ fn migrate_run(
     }
 
     let unmatched: Vec<_> = plan.unmatched().collect();
+    let likely_generated: Vec<_> = plan.likely_generated().collect();
     let undescribed: Vec<_> = plan.undescribed().collect();
     let changes = plan.changes().count();
 
@@ -111,6 +112,23 @@ fn migrate_run(
         for entry in &unmatched {
             println!("  {}", entry.path);
         }
+    }
+    if !likely_generated.is_empty() {
+        println!();
+        println!(
+            "{} file(s) look generated and were not migrated:",
+            likely_generated.len()
+        );
+        for entry in &likely_generated {
+            println!(
+                "  {}: {}",
+                entry.path,
+                entry.skip.as_ref().map_or(String::new(), Skip::label)
+            );
+        }
+        println!(
+            "Add generator-owned paths to `[paths] generated`, or remove a misleading signal."
+        );
     }
     if !undescribed.is_empty() {
         println!();
@@ -148,7 +166,7 @@ fn migrate_run(
         // Unmatched files are the whole point of reporting rather than
         // guessing, so they make the run non-zero: the batch is not finished
         // until somebody has typed them.
-        if !unmatched.is_empty() {
+        if !unmatched.is_empty() || !likely_generated.is_empty() {
             return Ok(ExitCode::FAILURE);
         }
     } else {
