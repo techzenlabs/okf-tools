@@ -341,7 +341,11 @@ fn inlined_group(
     let mut lines = vec![format!("* {name}")];
     for doc in direct_documents(sub, config) {
         let (title, desc) = label(&doc, root, mirrors);
-        lines.push(indent(&entry(&title, &format!("{name}/{}", file_name(&doc)), &desc)));
+        lines.push(indent(&entry(
+            &title,
+            &format!("{name}/{}", file_name(&doc)),
+            &desc,
+        )));
     }
     for child in walk::children(sub, &config.paths.skip_names) {
         if child.is_dir() && in_bundle(&child, root, config) {
@@ -642,7 +646,10 @@ mod tests {
         config.index.group_by_month = vec!["archive".to_owned()];
 
         let _ = run(&root, &config, false).unwrap_or_default();
-        assert!(root.join("archive/20260310-clippy-cleanup/index.md").exists());
+        assert!(
+            root.join("archive/20260310-clippy-cleanup/index.md")
+                .exists()
+        );
 
         let archive = walk::read_lossy(&root.join("archive/index.md"));
         assert!(archive.contains("## 2026-03\n"), "{archive}");
