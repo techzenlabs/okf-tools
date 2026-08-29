@@ -321,6 +321,29 @@ because a machine-local `insteadOf` rewrite has no business in a tracked file.
 for. A manifest naming anything else fails on the first line of the job rather
 than at fetch time.
 
+### A tenant's own brand
+
+A tenant that drops any of four names into its own `static/` gets them linked
+from every page, and one that drops none emits no link at all:
+
+| File | What it becomes |
+|---|---|
+| `favicon.ico` | the tab icon, `rel="icon" sizes="any"` |
+| `favicon-32x32.png` | the tab icon a browser prefers when it can pick |
+| `favicon-192x192.png` | the bookmark icon, and the mark in the header link |
+| `apple-touch-icon.png` | the home-screen icon on iOS |
+
+There is no manifest key for these on purpose. A path a tenant writes down is a
+path a tenant can mistype, and a mistyped icon is not a build failure — it is a
+404 on every page of the site, which nobody notices because the page still
+renders. Asking the filesystem cannot fail that way: the file is there and gets
+linked, or it is not there and nothing is claimed.
+
+`favicon.ico` and `apple-touch-icon.png` would be fetched from the site root by
+name even with no markup at all, so what the block earns is the two PNGs and
+the header mark. The mark is decorative — `alt=""` — because the site title
+beside it already names the link.
+
 ### The recipes
 
 `just build` runs assemble, scan, hugo, the raw-markdown comparison and
