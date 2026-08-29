@@ -13,6 +13,9 @@ Commands:
 - `okf-migrate` writes the frontmatter it can derive and reports the rest.
   `--retype` applies a rename table to a bundle whose documents are already
   typed, and changes nothing but `type`.
+- `okf-adopt --survey-branches` reports Markdown on local remote-tracking
+  branches that the adopting tree lacks and that its configuration would not
+  accept. It reads Git objects and writes nothing.
 - `okf-assemble` turns a tenant manifest into a Hugo content tree.
 - `okf-scan` refuses to publish a tree carrying a key, a token or an
   identifier.

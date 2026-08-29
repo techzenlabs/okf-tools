@@ -17,6 +17,7 @@
 //! generated indexes *and* identical diagnostics. A checker that agrees on
 //! output but disagrees on what it complains about has not been ported.
 
+pub mod adopt;
 pub mod assemble;
 pub mod bootstrap;
 pub mod check;

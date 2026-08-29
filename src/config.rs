@@ -510,6 +510,7 @@ impl Config {
             path: shown.clone(),
             source,
         })?;
+        config.bundle_root = normalize_bundle_root(&config.bundle_root);
         config.as_of = as_of;
         if config.config_version > SUPPORTED_CONFIG_VERSION {
             return Err(ConfigError::Version {
@@ -656,6 +657,19 @@ impl Config {
     }
 }
 
+fn normalize_bundle_root(bundle_root: &str) -> String {
+    let mut normalized = bundle_root;
+    while let Some(remainder) = normalized.strip_prefix("./") {
+        normalized = remainder.trim_start_matches('/');
+    }
+    let normalized = normalized.trim_end_matches('/');
+    if normalized.is_empty() {
+        ".".to_owned()
+    } else {
+        normalized.to_owned()
+    }
+}
+
 /// Does `name` match `pattern`, where `*` matches any run of characters?
 ///
 /// Deliberately not a full glob: the only patterns a bundle configures are
@@ -702,6 +716,31 @@ mod tests {
         assert_eq!(config.index.group_by_month, ["meetings"]);
         assert_eq!(config.index.month_entry_glob, "summary*.md");
         assert_eq!(config.okf_version, "0.2");
+    }
+
+    #[test]
+    fn load_normalizes_bundle_root_spellings() {
+        let root = std::env::temp_dir().join(format!(
+            "okf-tools-config-bundle-root-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::create_dir_all(&root);
+
+        for (configured, expected) in [
+            (".//docs", "docs"),
+            ("././docs", "docs"),
+            ("docs/", "docs"),
+            ("./docs", "docs"),
+            (".", "."),
+        ] {
+            let contents = format!("bundle_root = {configured:?}\n");
+            let _ = std::fs::write(root.join("okf.toml"), contents);
+            let config = Config::load(&root).unwrap_or_default();
+            assert_eq!(config.bundle_root, expected, "configured as {configured}");
+        }
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

@@ -107,6 +107,21 @@ impl GeneratedSignal {
     }
 }
 
+/// The content signal that suggests a generator owns this document.
+///
+/// The detector is shared with branch adoption surveys so the warning before
+/// adoption and the migration refusal after adoption cannot drift apart.
+#[must_use]
+pub fn generated_signal(text: &str) -> Option<GeneratedSignal> {
+    if has_generated_marker(text) {
+        return Some(GeneratedSignal::Marker);
+    }
+    parse_strict(text)
+        .ok()
+        .filter(|frontmatter| frontmatter.keys().any(|key| key == "generated"))
+        .map(|_| GeneratedSignal::FrontmatterKey)
+}
+
 /// What migration would do to one file.
 #[derive(Debug, Clone)]
 pub struct Entry {
@@ -389,8 +404,8 @@ fn open<'a>(relative: &str, text: &'a str, config: &Config) -> Result<Opened<'a>
     if config.is_generated(relative) {
         return Err(Skip::Generated);
     }
-    if has_generated_marker(text) {
-        return Err(Skip::LikelyGenerated(GeneratedSignal::Marker));
+    if let Some(signal) = generated_signal(text) {
+        return Err(Skip::LikelyGenerated(signal));
     }
 
     let (existing, body) = match parse_strict(text) {
@@ -401,13 +416,6 @@ fn open<'a>(relative: &str, text: &'a str, config: &Config) -> Result<Opened<'a>
         }
         Err(other) => return Err(Skip::Unparseable(other.message())),
     };
-    if existing
-        .as_ref()
-        .is_some_and(|fm| fm.keys().any(|key| key == "generated"))
-    {
-        return Err(Skip::LikelyGenerated(GeneratedSignal::FrontmatterKey));
-    }
-
     let written_type = existing
         .as_ref()
         .map(|fm| fm.get_unquoted("type"))
