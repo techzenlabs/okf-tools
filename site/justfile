@@ -20,9 +20,17 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 # `public/` is excluded because it is last run's output sitting in the tree
 # when this run's scan happens, and re-reading it would attribute a finding to
 # a path this build did not produce. The sources are what this scan judges.
+#
+# `work/` is excluded because Hugo never reads it. `okf-assemble` fetches the
+# bundle sources into it and assembles `content/` out of it, so everything
+# that publishes is already inspected under `content/`. Scanning it instead
+# holds every bundle's test fixtures and CI scripts to the site's scanner:
+# ria went red on a support-bundle redaction fixture asserting that a
+# synthetic token gets stripped, in a script the site does not publish.
+# Both exclusions are printed by every run, so neither is silent.
 build:
     okf-assemble
-    okf-scan . --exclude public
+    okf-scan . --exclude public --exclude work
     hugo
     okf-assemble --verify-raw
     pagefind --site public

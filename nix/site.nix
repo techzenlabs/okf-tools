@@ -9,9 +9,10 @@
 #      revs. A verified pin is the pinned corpus, so no page is stamped
 #      "local build"; that stamp is `--local`'s, for a working tree standing
 #      in for the pin on somebody's laptop.
-#   2. `okf-scan .` over the assembled site root with `public/` excluded,
-#      which is the justfile's step 2 exactly: `content` alone never reads
-#      `static/` or `layouts/`, and those are the shared assets that publish;
+#   2. `okf-scan .` over the assembled site root with `public/` and `work/`
+#      excluded, which is the justfile's step 2 exactly: `content` alone
+#      never reads `static/` or `layouts/`, and those are the shared assets
+#      that publish, while `work/` is the fetch tree Hugo never reads;
 #   3. `hugo`;
 #   4. `okf-assemble --verify-raw`;
 #   5. `pagefind --site public`.
@@ -79,7 +80,7 @@ in
     ''}
     cd "$site"
     okf-assemble ${pinnedFlags}
-    okf-scan . --exclude public
+    okf-scan . --exclude public --exclude work
     hugo
     okf-assemble --verify-raw
     pagefind --site public
