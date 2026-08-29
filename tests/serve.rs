@@ -71,6 +71,61 @@ fn binary() -> PathBuf {
     path.join("okf-serve")
 }
 
+fn child_is_ready(
+    child: &mut Child,
+    port: u16,
+    expected_body: &str,
+    identity_header: Option<&str>,
+) -> bool {
+    endpoint_is_ready(port, expected_body, identity_header, || {
+        matches!(child.try_wait(), Ok(None))
+    })
+}
+
+fn endpoint_is_ready(
+    port: u16,
+    expected_body: &str,
+    identity_header: Option<&str>,
+    mut child_is_running: impl FnMut() -> bool,
+) -> bool {
+    if !child_is_running() {
+        return false;
+    }
+
+    let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) else {
+        return false;
+    };
+    let timeout = Some(std::time::Duration::from_secs(1));
+    if stream.set_read_timeout(timeout).is_err() || stream.set_write_timeout(timeout).is_err() {
+        return false;
+    }
+    let mut request =
+        String::from("GET /.okf-ready.txt HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n");
+    if let Some(header) = identity_header {
+        request.push_str(header);
+        request.push_str(": readiness\r\n");
+    }
+    request.push_str("\r\n");
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+
+    let mut response = String::new();
+    if stream.read_to_string(&mut response).is_err() {
+        return false;
+    }
+    let Some((head, body)) = response.split_once("\r\n\r\n") else {
+        return false;
+    };
+    let answered = head
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        == Some("200")
+        && body == expected_body;
+    answered && child_is_running()
+}
+
 fn start(label: &str, extra: &[&str]) -> Serving {
     let root = std::env::temp_dir().join(format!("okf-serve-e2e-{label}"));
     let _ = std::fs::remove_dir_all(&root);
@@ -81,6 +136,11 @@ fn start(label: &str, extra: &[&str]) -> Serving {
     std::fs::write(root.join("section/index.html"), "<h1>section</h1>").unwrap();
     std::fs::write(root.join("listing/secret.html"), "<h1>not linked</h1>").unwrap();
     std::fs::write(root.join("style.css"), "body{}").unwrap();
+    let readiness_body = format!("okf-serve-ready:{label}");
+    std::fs::write(root.join(".okf-ready.txt"), &readiness_body).unwrap();
+    let identity_header = extra
+        .windows(2)
+        .find_map(|args| (args[0] == "--require-header").then_some(args[1]));
 
     let port = free_port();
     let mut args: Vec<String> = vec![
@@ -99,15 +159,73 @@ fn start(label: &str, extra: &[&str]) -> Serving {
         .spawn()
         .unwrap();
 
-    let serving = Serving { child, port, root };
+    let mut serving = Serving { child, port, root };
     // Wait for the listener rather than sleeping a guess.
     for _ in 0..200 {
-        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+        if child_is_ready(&mut serving.child, port, &readiness_body, identity_header) {
             return serving;
         }
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
     panic!("okf-serve did not start listening on {port}");
+}
+
+#[test]
+fn a_transient_listener_is_not_child_readiness() {
+    let mut serving = start("readiness", &[]);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let transient_port = listener.local_addr().unwrap().port();
+
+    assert!(!child_is_ready(
+        &mut serving.child,
+        transient_port,
+        "okf-serve-ready:readiness",
+        None,
+    ));
+}
+
+#[test]
+fn an_answer_is_not_readiness_after_the_child_exits() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let mut child = Command::new("sh")
+        .args(["-c", "read _"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let child_input = child.stdin.take().unwrap();
+    let child_is_running = Arc::new(AtomicBool::new(true));
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let responder_child_is_running = Arc::clone(&child_is_running);
+    let responder = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        {
+            let mut reader = BufReader::new(&mut stream);
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+            }
+        }
+        let _ = stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nready");
+        drop(child_input);
+        child.wait().unwrap();
+        responder_child_is_running.store(false, Ordering::Release);
+    });
+
+    let ready = endpoint_is_ready(port, "ready", None, || {
+        child_is_running.load(Ordering::Acquire)
+    });
+    responder.join().unwrap();
+    assert!(!ready);
 }
 
 struct Answer {
