@@ -77,7 +77,18 @@ fn child_is_ready(
     expected_body: &str,
     identity_header: Option<&str>,
 ) -> bool {
-    if !matches!(child.try_wait(), Ok(None)) {
+    endpoint_is_ready(port, expected_body, identity_header, || {
+        matches!(child.try_wait(), Ok(None))
+    })
+}
+
+fn endpoint_is_ready(
+    port: u16,
+    expected_body: &str,
+    identity_header: Option<&str>,
+    mut child_is_running: impl FnMut() -> bool,
+) -> bool {
+    if !child_is_running() {
         return false;
     }
 
@@ -112,7 +123,7 @@ fn child_is_ready(
         .and_then(|line| line.split_whitespace().nth(1))
         == Some("200")
         && body == expected_body;
-    answered && matches!(child.try_wait(), Ok(None))
+    answered && child_is_running()
 }
 
 fn start(label: &str, extra: &[&str]) -> Serving {
@@ -175,24 +186,44 @@ fn a_transient_listener_is_not_child_readiness() {
 
 #[test]
 fn an_answer_is_not_readiness_after_the_child_exits() {
-    let mut child = Command::new(binary())
-        .args(["--root", "/nonexistent/okf-serve", "--port", "1"])
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let mut child = Command::new("sh")
+        .args(["-c", "read _"])
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    assert!(!child.wait().unwrap().success());
+    let child_input = child.stdin.take().unwrap();
+    let child_is_running = Arc::new(AtomicBool::new(true));
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
+    let responder_child_is_running = Arc::clone(&child_is_running);
     let responder = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
+        {
+            let mut reader = BufReader::new(&mut stream);
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+            }
+        }
         let _ = stream
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nready");
+        drop(child_input);
+        child.wait().unwrap();
+        responder_child_is_running.store(false, Ordering::Release);
     });
 
-    let ready = child_is_ready(&mut child, port, "ready", None);
-    let _ = TcpStream::connect(("127.0.0.1", port));
+    let ready = endpoint_is_ready(port, "ready", None, || {
+        child_is_running.load(Ordering::Acquire)
+    });
     responder.join().unwrap();
     assert!(!ready);
 }
