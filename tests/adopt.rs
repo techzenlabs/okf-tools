@@ -198,6 +198,39 @@ fn survey_uses_remote_refs_and_classifies_only_branch_only_findings() {
 }
 
 #[test]
+fn a_leading_dot_slash_in_bundle_root_does_not_change_the_survey() {
+    let root = Scratch::new("dot-slash-bundle-root");
+    initialize(root.path());
+    git(root.path(), &["switch", "--quiet", "-c", "topic"]);
+    write(&root.path().join("docs/typed/plain.md"), "# Plain\n");
+    git(root.path(), &["add", "."]);
+    git(root.path(), &["commit", "--quiet", "-m", "topic"]);
+    git(
+        root.path(),
+        &["update-ref", "refs/remotes/origin/topic", "HEAD"],
+    );
+    git(root.path(), &["switch", "--quiet", "main"]);
+
+    let without_dot_slash = run(root.path(), &["--survey-branches"]);
+    write(
+        &root.path().join("okf.toml"),
+        &std::fs::read_to_string(root.path().join("okf.toml"))
+            .expect("fixture config should be readable")
+            .replace("bundle_root = \"docs\"", "bundle_root = \"./docs\""),
+    );
+    let with_dot_slash = run(root.path(), &["--survey-branches"]);
+
+    assert!(without_dot_slash.status.success());
+    assert!(with_dot_slash.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&without_dot_slash.stdout),
+        "origin/topic:\n  would fail\ttyped/plain.md\n"
+    );
+    assert_eq!(with_dot_slash.stdout, without_dot_slash.stdout);
+    assert_eq!(with_dot_slash.stderr, without_dot_slash.stderr);
+}
+
+#[test]
 fn a_repository_with_no_branch_findings_prints_nothing() {
     let root = Scratch::new("clean");
     initialize(root.path());

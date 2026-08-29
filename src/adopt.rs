@@ -198,10 +198,11 @@ pub fn survey_branches(
 }
 
 fn repository_bundle_prefix(bundle_root: &str) -> String {
-    if bundle_root == "." {
+    let normalized = bundle_root.trim_start_matches("./").trim_end_matches('/');
+    if normalized.is_empty() {
         ".".to_owned()
     } else {
-        bundle_root.trim_end_matches('/').to_owned()
+        normalized.to_owned()
     }
 }
 
