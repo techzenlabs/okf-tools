@@ -15,6 +15,10 @@
 #      names the planted file and the rule, and does not reproduce the match.
 #   3. The same command is clean once the planted file is gone, so it is a
 #      gate and not a tripwire that fires on everything.
+#   4. The same credential planted under `work/` does *not* fail it. `work/`
+#      is the fetch tree, Hugo never reads it, and `content/` is what it was
+#      assembled into. Holding a bundle's own test fixtures to the site's
+#      scanner is what excluding it prevents.
 #
 # The command in step 2 is read out of the *assembled* justfile rather than
 # written here, so weakening the recipe changes what this check runs and the
@@ -106,3 +110,26 @@ echo "site root: $root_files file(s) inspected; content alone: $content_files"
 # The shared assets specifically, because they are the ones that publish.
 test -f static/css/okf.css || fail "the shared stylesheet is not in the scanned tree"
 test -f layouts/_default/baseof.html || fail "the shared layouts are not in the scanned tree"
+
+# 4. The fetch tree is not the published tree. The value is assembled from
+# pieces here for the same reason the fixture's is read rather than written:
+# this repository scans itself.
+mkdir -p work/somebundle/scripts
+jwt_head="eyJhbGciOiJIUzI1NiJ9"
+jwt_body="cGF5bG9hZHBheWxvYWQ"
+jwt_sig="c2lnbmF0dXJl"
+printf 'SECRET_TOKEN="%s.%s.%s"\n' "$jwt_head" "$jwt_body" "$jwt_sig" \
+  > work/somebundle/scripts/redaction-fixture.sh
+if ! okf-scan work/somebundle > "$log/work-alone.log" 2>&1; then
+  echo "the planted fetch-tree credential is detectable on its own"
+else
+  cat "$log/work-alone.log"
+  fail "the planted fetch-tree credential is not detectable at all, so step 4 proves nothing"
+fi
+eval "$shipped" > "$log/work.log" 2>&1 || {
+  cat "$log/work.log"
+  fail "a credential under work/ failed the build's scan; the fetch tree is not what this site publishes"
+}
+cat "$log/work.log"
+grep -q "not scanning work" "$log/work.log" ||
+  fail "the scan did not announce the work/ exclusion; an exemption must never be silent"
