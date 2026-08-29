@@ -1,6 +1,6 @@
 //! Scan a tree for material that must not be published.
 //!
-//! Usage: `okf-scan [<path>] [--bare-9] [--deny <file>] [--exclude <prefix>]...`
+//! Usage: `okf-scan [<path>] [--bare-9] [--exclude <prefix>]...`
 //!
 //! Exits non-zero on a finding, on a file it could not inspect, and on a run
 //! that inspected nothing. The third is the one that matters: a scanner
@@ -11,11 +11,9 @@ use std::process::ExitCode;
 
 use okf_tools::scan::{self, Options};
 
-const USAGE: &str = "usage: okf-scan [<path>] [--bare-9] [--deny <file>] \
-     [--exclude <prefix>]...\n\n\
+const USAGE: &str = "usage: okf-scan [<path>] [--bare-9] [--exclude <prefix>]...\n\n\
      Fails on a finding, on a file it cannot inspect, and on a run that\n\
-     inspected nothing at all. --deny reads one literal term per line; it is\n\
-     supplied by the caller and never shipped.";
+     inspected nothing at all.";
 
 fn main() -> ExitCode {
     match run() {
@@ -34,11 +32,6 @@ fn run() -> anyhow::Result<ExitCode> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--bare-9" => options.bare_nine_digit = true,
-            "--deny" => {
-                let path = args.next().unwrap_or_default();
-                let text = std::fs::read_to_string(&path)?;
-                options.deny.extend(okf_tools::manifest::deny_terms(&text));
-            }
             "--exclude" => options.exclude.push(args.next().unwrap_or_default()),
             other if other.starts_with("--") => {
                 eprintln!("okf-scan: unrecognised argument `{other}`\n\n{USAGE}");

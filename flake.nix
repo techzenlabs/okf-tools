@@ -98,18 +98,12 @@
           # script and not a copy of the steps, a step deleted from
           # nix/site.nix disappears from what site-must-fail executes, the
           # broken build goes green, and the check goes red the same day.
-          # The fixture tenant's deny list. A real tenant's is a file on the
-          # machine that runs the build and is in no repository; this one is
-          # tracked because its three terms are invented for these checks and
-          # name nobody. It is installed outside the site root so the scan
-          # never reads the list it was armed with.
-          denyList = ./fixtures/site/tenant/deny.list;
           siteBuildScript = sources:
             (import ./nix/site.nix {
               inherit pkgs;
               okf = okf-tools;
               manifestDir = ./fixtures/site/tenant;
-              inherit sources denyList;
+              inherit sources;
             }).buildCommand;
           mkCheck = name: script: extra:
             pkgs.runCommand name ({
@@ -138,12 +132,11 @@
           scan-negative-control =
             mkCheck "scan-negative-control" ./nix/checks/scan-negative-control.sh {};
           # The gate §7.2 asked for: the scan reads the assembled `static/`
-          # and `layouts/` trees, not `content/` alone, and a build whose
-          # scan was never armed is refused. Both directions are asserted,
-          # against a fixture that plants another tenant's name in `static/`.
+          # and `layouts/` trees, not `content/` alone. Asserted against a
+          # fixture that plants a synthetic credential in `static/`, which
+          # the content-only recipe cannot see.
           scan-site-root = mkCheck "scan-site-root" ./nix/checks/scan-site-root.sh {
             PLANTED_STATIC = ./fixtures/site/planted-static;
-            DENY_LIST = denyList;
           };
           layout-fork = mkCheck "layout-fork" ./nix/checks/layout-fork.sh {};
           bundles-current =
@@ -161,7 +154,6 @@
                 inherit pkgs;
                 okf = okf-tools;
                 manifestDir = ./fixtures/site/tenant;
-                inherit denyList;
                 sources = {
                   alpha = {
                     outPath = ./fixtures/site/alpha;

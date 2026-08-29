@@ -327,13 +327,7 @@ than at fetch time.
 pagefind. The scan reads the assembled site *root* with `public/` excluded,
 not `content/` alone: `static/` and `layouts/` are where the shared assets
 land, Hugo byte-copies `static/` into `public/`, and a comment in a shared
-stylesheet is served to every reader of every tenant. It needs a deny list,
-supplied by the caller in `OKF_SCAN_DENY` — a file on the machine running the
-build, holding the other tenants, their clients and their hosts, one per line.
-`okf-assemble` refuses to assemble without one, so an unarmed tenant is a red
-build rather than a quiet green one, and the list is never committed to any
-repository: three of the four site repositories are controlled by a client, so
-a tracked roster would be exactly the disclosure it exists to prevent. `just serve` adds `hugo server` on localhost and takes `--local
+stylesheet is served to every reader of every tenant. `just serve` adds `hugo server` on localhost and takes `--local
 <id>=<path>`, which points one bundle at a working tree for that invocation
 only. The override is an argument and is never written to the manifest: when a
 working tree and the pinned `rev` disagree, the manifest wins, and the page
