@@ -7,11 +7,6 @@
 # was reviewed.
 set -euo pipefail
 export HOME="$TMPDIR"
-# `okf-assemble` refuses a build whose scan was never armed with a deny
-# list, so every check that assembles supplies the fixture tenant's. The
-# file sits outside any tree these checks scan, which is the shape a real
-# tenant's has: on the machine that runs the build, in no repository.
-export OKF_SCAN_DENY="$FIXTURES/site/tenant/deny.list"
 export GIT_CONFIG_GLOBAL="$TMPDIR/gitconfig"
 export GIT_CONFIG_NOSYSTEM=1
 git config --global user.name "fixture"

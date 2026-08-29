@@ -155,16 +155,6 @@ fn run() -> anyhow::Result<ExitCode> {
         return run_update(&manifest, &manifest_path, &id);
     }
 
-    // The scan this build is about to run has to have been armed, and the
-    // place to say so is here: `okf-assemble` is step one of every `just
-    // build`, so an unarmed tenant goes red before it fetches anything rather
-    // than after it has published. The assertion is on *supply* -- a file the
-    // caller named, holding terms -- and never on a tracked path, because a
-    // roster committed to a site repository is the disclosure the deny list
-    // exists to prevent. See `manifest::check_deny_list_supplied`.
-    let terms = manifest::check_deny_list_supplied()?;
-    println!("scan deny list: {terms} term(s) supplied by the caller.");
-
     let mut options = Options::new(root);
     options.locals = args.locals;
     options.pinned = args.pinned;

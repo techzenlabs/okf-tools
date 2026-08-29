@@ -122,12 +122,6 @@ pub struct Options {
     /// repository full of commit hashes and pinned revisions is mostly noise —
     /// and a gate people learn to ignore protects nothing.
     pub bare_nine_digit: bool,
-    /// Literal strings that must not appear, case-insensitively.
-    ///
-    /// Supplied by the caller and never shipped. A list of the names that must
-    /// not appear is itself a disclosure of who they are, so it lives outside
-    /// any repository this tool is checked into.
-    pub deny: Vec<String>,
     /// Path prefixes not scanned, named on the command line so an exemption is
     /// always visible in the run that used it.
     pub exclude: Vec<String>,
@@ -222,7 +216,6 @@ fn compile(options: &Options) -> Result<Vec<Rule>, ScanError> {
 /// reported in the [`Report`].
 pub fn scan(root: &Path, options: &Options) -> Result<Report, ScanError> {
     let rules = compile(options)?;
-    let deny: Vec<String> = options.deny.iter().map(|d| d.to_lowercase()).collect();
     let mut report = Report::default();
     let mut queue = vec![root.to_path_buf()];
     let excluded: BTreeSet<String> = options.exclude.iter().cloned().collect();
@@ -239,7 +232,7 @@ pub fn scan(root: &Path, options: &Options) -> Result<Report, ScanError> {
             push_children(&path, &mut queue, &mut report);
             continue;
         }
-        scan_file(&path, &shown, &rules, &deny, &mut report);
+        scan_file(&path, &shown, &rules, &mut report);
     }
     report
         .findings
@@ -267,7 +260,7 @@ fn push_children(dir: &Path, queue: &mut Vec<PathBuf>, report: &mut Report) {
     }
 }
 
-fn scan_file(path: &Path, shown: &str, rules: &[Rule], deny: &[String], report: &mut Report) {
+fn scan_file(path: &Path, shown: &str, rules: &[Rule], report: &mut Report) {
     match std::fs::metadata(path) {
         Ok(meta) if meta.len() > MAX_FILE_BYTES => {
             report.unreadable.push(shown.to_owned());
@@ -290,18 +283,11 @@ fn scan_file(path: &Path, shown: &str, rules: &[Rule], deny: &[String], report: 
     report.scanned = report.scanned.saturating_add(1);
     let text = String::from_utf8_lossy(&bytes);
     for (number, line) in text.lines().enumerate() {
-        inspect_line(shown, number.saturating_add(1), line, rules, deny, report);
+        inspect_line(shown, number.saturating_add(1), line, rules, report);
     }
 }
 
-fn inspect_line(
-    shown: &str,
-    line_number: usize,
-    line: &str,
-    rules: &[Rule],
-    deny: &[String],
-    report: &mut Report,
-) {
+fn inspect_line(shown: &str, line_number: usize, line: &str, rules: &[Rule], report: &mut Report) {
     for rule in rules {
         if let Ok(Some(found)) = rule.pattern.find(line) {
             report.findings.push(Finding {
@@ -311,18 +297,6 @@ fn inspect_line(
                 masked: mask(found.as_str()),
             });
         }
-    }
-    if deny.is_empty() {
-        return;
-    }
-    let lowered = line.to_lowercase();
-    if deny.iter().any(|word| lowered.contains(word.as_str())) {
-        report.findings.push(Finding {
-            path: shown.to_owned(),
-            line: line_number,
-            rule: "denied-term",
-            masked: "…".to_owned(),
-        });
     }
 }
 
@@ -345,7 +319,7 @@ mod tests {
         let rules = compile(options).unwrap_or_default();
         let mut report = Report::default();
         for (number, line) in text.lines().enumerate() {
-            inspect_line("x", number, line, &rules, &[], &mut report);
+            inspect_line("x", number, line, &rules, &mut report);
         }
         report.findings.iter().map(|f| f.rule).collect()
     }
