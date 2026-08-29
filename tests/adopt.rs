@@ -72,7 +72,7 @@ fn initialize(root: &Path) {
     git(root, &["config", "user.name", "Fixture"]);
     write(
         &root.join("okf.toml"),
-        "config_version = 1\nbundle_root = \"docs\"\n\n[paths]\nskip_names = [\"vendor\"]\ngenerated = [\"generated/**\"]\n\n[[type_rules]]\npath = \"typed/**\"\ntype = \"Reference\"\n",
+        "config_version = 1\nbundle_root = \"docs\"\n\n[paths]\nskip_names = [\"vendor\"]\ngenerated = [\"generated/**\"]\n\n[confidentiality]\nlinks_stay_in_bundle = true\nowner_record = true\nsite_urls = [\"https://allowed.example.test/\"]\n\n[[type_rules]]\npath = \"typed/**\"\ntype = \"Reference\"\n",
     );
     write(
         &root.join("docs/typed/shared.md"),
@@ -148,6 +148,18 @@ fn survey_uses_remote_refs_and_classifies_only_branch_only_findings() {
         "# Missing frontmatter\n",
     );
     write(
+        &root.path().join("docs/typed/bad-link.md"),
+        "---\ntype: Reference\n---\n\n[Outside](../../private.md)\n",
+    );
+    write(
+        &root.path().join("docs/typed/bad-owner.md"),
+        "---\ntype: Reference\nowner: Pat\n---\n\n# Bad owner\n",
+    );
+    write(
+        &root.path().join("docs/typed/bad-url.md"),
+        "---\ntype: Reference\n---\n\n[Vendor](https://vendor.example.test/page)\n",
+    );
+    write(
         &root.path().join("docs/typed/clean.md"),
         "---\ntype: Reference\n---\n\n# Clean\n",
     );
@@ -179,7 +191,7 @@ fn survey_uses_remote_refs_and_classifies_only_branch_only_findings() {
     assert!(output.status.success(), "{stdout}");
     assert_eq!(
         stdout,
-        "origin/topic:\n  generated\tgenerated/report.md\n  untypable\torphan.md\n  generated\ttyped/frontmatter.md\n  generated\ttyped/marker.md\n  would fail\ttyped/plain.md\n"
+        "origin/topic:\n  generated\tgenerated/report.md\n  untypable\torphan.md\n  would fail\ttyped/bad-link.md\n  would fail\ttyped/bad-owner.md\n  would fail\ttyped/bad-url.md\n  generated\ttyped/frontmatter.md\n  generated\ttyped/marker.md\n  would fail\ttyped/plain.md\n"
     );
     assert_eq!(git(root.path(), &["branch", "--show-current"]), "main");
     assert!(git(root.path(), &["status", "--porcelain"]).is_empty());

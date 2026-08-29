@@ -172,7 +172,13 @@ pub fn check_bundle(root: &Path, config: &Config) -> Result<Report, crate::confi
         // included: a hand-written root index carries links like any other
         // page, and the gate exists for the page nobody thought to check.
         if config.confidentiality.links_stay_in_bundle {
-            check_links(&mut report, &name, &text, root, &config.confidentiality);
+            check_links(
+                &mut report,
+                &name,
+                &text,
+                Some(root),
+                &config.confidentiality,
+            );
         }
         if config.confidentiality.owner_record {
             check_owner(&mut report, &name, &text);
@@ -184,8 +190,8 @@ pub fn check_bundle(root: &Path, config: &Config) -> Result<Report, crate::confi
 /// Whether one document would make an otherwise conformant bundle fail.
 ///
 /// This checks only rules whose answer is contained in the document itself.
-/// Set-wide warnings such as duplicate content and section collisions do not
-/// make a document non-conformant and are outside this question.
+/// Set-wide warnings such as duplicate content and section collisions, plus
+/// link target existence, are outside this question.
 ///
 /// # Errors
 ///
@@ -214,6 +220,12 @@ pub fn document_would_fail(
                 config.as_of.as_ref(),
             );
         }
+    }
+    if config.confidentiality.links_stay_in_bundle {
+        check_links(&mut report, relative, text, None, &config.confidentiality);
+    }
+    if config.confidentiality.owner_record {
+        check_owner(&mut report, relative, text);
     }
     Ok(!report.errors.is_empty())
 }
@@ -511,15 +523,22 @@ fn naming(rest: &[String]) -> String {
     shown.join(", ")
 }
 
-/// No link leaves the bundle.
+/// No link leaves the bundle, and every link resolves when `root` is known.
 ///
 /// Containment on its own would not catch the failure this exists for. A page
 /// hand-copied out of a private bundle keeps `../people/dana-quill.md`, and
 /// from `systems/` that resolves to `people/dana-quill.md`, which is *inside*
 /// the new bundle root and simply is not there. So the target has to exist,
 /// and a link to a file the bundle does not hold is the same error as a link
-/// that climbs out of it.
-fn check_links(report: &mut Report, path: &str, text: &str, root: &Path, conf: &Confidentiality) {
+/// that climbs out of it. A single-document check has no tree to resolve
+/// targets against, but still rejects escaping paths and disallowed URLs.
+fn check_links(
+    report: &mut Report,
+    path: &str,
+    text: &str,
+    root: Option<&Path>,
+    conf: &Confidentiality,
+) {
     let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
     let mut targets: Vec<(usize, String, &'static str, &str)> = links::links(text)
         .into_iter()
@@ -553,7 +572,7 @@ fn check_links(report: &mut Report, path: &str, text: &str, root: &Path, conf: &
 fn judge_target(
     report: &mut Report,
     path: &str,
-    root: &Path,
+    root: Option<&Path>,
     conf: &Confidentiality,
     line: usize,
     raw: &str,
@@ -576,7 +595,7 @@ fn judge_target(
             &format!("line {line}: {label} `{raw}` leaves the bundle"),
         ),
         Target::Inside { path: inside } => {
-            if !root.join(inside).exists() {
+            if root.is_some_and(|root| !root.join(inside).exists()) {
                 report.err(
                     path,
                     &format!("line {line}: {label} `{raw}` has no target in this bundle"),
