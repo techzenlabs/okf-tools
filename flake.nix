@@ -194,6 +194,18 @@
                 grep -rl 'class="okf-local"' "$SITE" | head >&2
                 fail "the local-build span reached a pinned build's pages"
               fi
+              # The brand set, in the direction site-pipeline cannot take:
+              # this fixture root has no `static/` of its own, so every icon
+              # link and the header mark must be absent. Config would have
+              # made the failure a 404 per page on a name somebody mistyped;
+              # the layout asks the filesystem instead, and this is the
+              # assertion that keeps it asking. --include, because pagefind's
+              # index holds page fragments and a false hit there would read
+              # as markup.
+              if grep -rq --include='*.html' 'rel="icon"\|okf-mark' "$SITE"; then
+                grep -rl --include='*.html' 'rel="icon"\|okf-mark' "$SITE" | head >&2
+                fail "a tenant that ships no brand files still linked one"
+              fi
               touch $out
             '';
           # The proof the pipeline's gates can still refuse: the same build

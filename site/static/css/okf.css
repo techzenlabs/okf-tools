@@ -51,6 +51,22 @@ h1, h2, h3 { line-height: 1.25; }
 
 .okf-footer { margin-top: 3rem; }
 .okf-home { font-weight: 600; text-decoration: none; }
+
+/* The brand mark, when the tenant ships `static/favicon-192x192.png`. Sized
+   in `em` so it tracks the header's own text rather than a pixel guess, and
+   dropped below the baseline by a fraction of that size so the mark centres
+   on the word beside it rather than sitting on top of it. It stays an inline
+   image inside the link, not a flex item: `.okf-header` aligns its own
+   children on the baseline, and making the link a flex box moves the
+   baseline it contributes onto the image, which pulls the search box beside
+   it out of line. */
+.okf-mark {
+  width: 1.4em;
+  height: 1.4em;
+  vertical-align: -0.35em;
+  margin-inline-end: 0.4rem;
+}
+
 .okf-local { color: var(--okf-muted); }
 .okf-description { color: var(--okf-muted); }
 .okf-empty { color: var(--okf-muted); }

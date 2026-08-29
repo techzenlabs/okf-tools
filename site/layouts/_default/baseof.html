@@ -33,6 +33,30 @@
     {{- with .Params.description }}
     <meta name="description" content="{{ . }}" />
     {{- end }}
+    {{- /* The tenant's brand, by convention rather than by configuration:
+           whichever of these four names a tenant drops into its own
+           `static/` gets linked, and a tenant that ships none emits no
+           link at all. Nothing here is a path a manifest names, so a
+           tenant cannot point a `<link>` at a file it forgot to commit
+           and put a 404 on every page of its site.
+
+           `favicon.ico` and `apple-touch-icon.png` are already fetched by
+           name from the site root without any of this, so the two that
+           make this block worth having are the PNGs: a browser picks the
+           32 for a tab and the 192 for a bookmark, and without the links
+           it has only the .ico to scale. */ -}}
+    {{- if os.FileExists "static/favicon.ico" }}
+    <link rel="icon" href="{{ "favicon.ico" | relURL }}" sizes="any" />
+    {{- end }}
+    {{- if os.FileExists "static/favicon-32x32.png" }}
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ "favicon-32x32.png" | relURL }}" />
+    {{- end }}
+    {{- if os.FileExists "static/favicon-192x192.png" }}
+    <link rel="icon" type="image/png" sizes="192x192" href="{{ "favicon-192x192.png" | relURL }}" />
+    {{- end }}
+    {{- if os.FileExists "static/apple-touch-icon.png" }}
+    <link rel="apple-touch-icon" href="{{ "apple-touch-icon.png" | relURL }}" />
+    {{- end }}
     <link rel="stylesheet" href="{{ "css/okf.css" | relURL }}" />
     {{- with .OutputFormats.Get "okfmarkdown" }}
     <link rel="alternate" type="text/markdown" href="{{ .RelPermalink }}" />
@@ -40,7 +64,18 @@
   </head>
   <body>
     <header class="okf-header">
-      <a class="okf-home" href="{{ "/" | relURL }}">{{ site.Title }}</a>
+      {{- /* The brand lockup: the 192px mark, when the tenant ships one,
+             then the site title. The mark is decorative — `alt=""` — because
+             the title beside it already names the link, and a reader on a
+             screen reader would otherwise hear the site named twice. The
+             `width`/`height` attributes are the intrinsic ratio so the row
+             does not shift while the image loads; the rendered size is the
+             stylesheet's, in `em`, so the mark tracks the header text. */}}
+      <a class="okf-home" href="{{ "/" | relURL }}">
+        {{- if os.FileExists "static/favicon-192x192.png" }}
+        <img class="okf-mark" src="{{ "favicon-192x192.png" | relURL }}" alt="" width="192" height="192" />
+        {{- end }}
+        {{ site.Title }}</a>
       {{- /* Search off the root: the collapsed form of the same partial the
              root mounts open. The guard is load-bearing, not defensive: the
              partial binds fixed DOM ids, so it must render exactly once per

@@ -12,6 +12,16 @@ install -m 644 "$FIXTURES/site/tenant/site.toml" "$site/site.toml"
 install -m 644 "$FIXTURES/site/tenant/credentials.allow" "$site/credentials.allow"
 cd "$site"
 
+# The tenant's brand set, which baseof links by name when the tenant ships it.
+# Bytes do not matter here and images are not what is under test: the layout
+# asks whether the file is there, and planting four empty ones is what makes
+# assertion 8 measure the branch rather than the picture. The negative
+# direction — a tenant with no `static/` emitting no icon link at all — is
+# packages-site's, whose fixture root has none of these.
+mkdir -p static
+touch static/favicon.ico static/favicon-32x32.png static/favicon-192x192.png \
+  static/apple-touch-icon.png
+
 fail() {
   echo "FAIL: $*" >&2
   exit 1
@@ -90,3 +100,30 @@ fi
 #    one, the breadcrumb, the listing markup and the index hygiene need
 #    structured reads rather than greps.
 python3 "$ASSERTIONS" "$site"
+
+# 8. The brand set. `favicon.ico` and `apple-touch-icon.png` are fetched from
+#    the root by name whatever the markup says, so the two that only a link
+#    can reach are the PNGs, and the mark in the header link is markup or it
+#    is nothing. Watched failing with the block taken out of baseof: hugo
+#    still published all four files, since `static/` is byte-copied whatever
+#    the markup says, and not one page referenced any of them.
+for rel in 'href="/favicon.ico"' \
+  'sizes="32x32" href="/favicon-32x32.png"' \
+  'sizes="192x192" href="/favicon-192x192.png"' \
+  'rel="apple-touch-icon" href="/apple-touch-icon.png"'; do
+  grep -q "$rel" public/index.html || fail "the head links no $rel"
+done
+grep -q 'class="okf-mark"' public/index.html ||
+  fail "the header link carries no brand mark for a tenant that ships one"
+# On every page, not only the front door: the mark and the icons live in the
+# skeleton, and a reader who lands on a deep page from search sees that page's
+# tab first.
+grep -q 'class="okf-mark"' public/alpha/runbooks/relay-restart/index.html ||
+  fail "a bundle page's header carries no brand mark"
+# Decorative, because the title beside it names the link already.
+grep -q 'class="okf-mark"[^>]*alt=""' public/index.html ||
+  fail "the brand mark is not marked decorative"
+# The files themselves reach the published root, or every link above is a 404.
+for icon in favicon.ico favicon-32x32.png favicon-192x192.png apple-touch-icon.png; do
+  test -f "public/$icon" || fail "the tenant's $icon was not published"
+done
