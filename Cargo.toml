@@ -35,6 +35,10 @@ path = "src/bin/okf-promote.rs"
 name = "okf-serve"
 path = "src/bin/okf-serve.rs"
 
+[[bin]]
+name = "okf-adopt"
+path = "src/bin/okf-adopt.rs"
+
 [dependencies]
 anyhow = "1"
 fancy-regex = "0.16"

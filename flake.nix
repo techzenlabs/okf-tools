@@ -72,6 +72,8 @@
               --prefix PATH : ${pkgs.lib.makeBinPath [pkgs.gitMinimal pkgs.gnutar pkgs.zstd]}
             wrapProgram $out/bin/okf-migrate \
               --prefix PATH : ${pkgs.lib.makeBinPath [pkgs.gitMinimal]}
+            wrapProgram $out/bin/okf-adopt \
+              --prefix PATH : ${pkgs.lib.makeBinPath [pkgs.gitMinimal]}
           '';
           inherit (okf-tools-unwrapped) meta;
         };

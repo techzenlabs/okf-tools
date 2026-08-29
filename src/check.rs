@@ -181,6 +181,43 @@ pub fn check_bundle(root: &Path, config: &Config) -> Result<Report, crate::confi
     Ok(report)
 }
 
+/// Whether one document would make an otherwise conformant bundle fail.
+///
+/// This checks only rules whose answer is contained in the document itself.
+/// Set-wide warnings such as duplicate content and section collisions do not
+/// make a document non-conformant and are outside this question.
+///
+/// # Errors
+///
+/// Fails when the configured vocabulary cannot be resolved.
+pub fn document_would_fail(
+    relative: &str,
+    text: &str,
+    config: &Config,
+) -> Result<bool, crate::config::ConfigError> {
+    let types = config.types()?;
+    let mut report = Report::default();
+    match relative.rsplit('/').next() {
+        Some("index.md") => {
+            check_index(&mut report, relative, text, relative == "index.md", config);
+        }
+        Some("log.md") => {
+            check_log(&mut report, relative, text);
+        }
+        _ => {
+            check_concept(
+                &mut report,
+                relative,
+                text,
+                &types,
+                config.confidentiality.closed_vocabulary,
+                config.as_of.as_ref(),
+            );
+        }
+    }
+    Ok(!report.errors.is_empty())
+}
+
 /// Two files in one bundle holding the same bytes (§5.1).
 ///
 /// **One home, and the second place links it.** A copy costs a divergence and
