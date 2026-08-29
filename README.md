@@ -238,6 +238,14 @@ document that already carries a `type` as finished. That is right everywhere
 except one place: a bundle whose 672 documents are typed against 39 names the
 vocabulary reduces to 26. `okf-migrate --retype` is that pass.
 
+Before either pass writes, `okf-migrate` searches Git-tracked non-Markdown
+files for each document path that would change. A path within twelve lines of
+a `sha256`, `digest`, `byte_length`, `size` or `length` key is reported as a
+possible byte pin, and the whole batch is left unchanged until somebody
+decides what that binding should cover. The scan is a textual
+preflight. It reports possible bindings rather than claiming to understand
+every manifest format.
+
 The rename table is data in `okf.toml`, because the names being retired belong
 to the bundle rather than to the tool:
 

@@ -36,6 +36,7 @@
               base != "result" && base != ".git" && base != "target";
           };
           cargoLock.lockFile = ./Cargo.lock;
+          nativeBuildInputs = [pkgs.gitMinimal];
           # The parity fixtures are the whole point of the port; run them.
           doCheck = true;
           meta = {
@@ -69,6 +70,8 @@
             wrapProgram $out/bin/okf-assemble \
               --set-default OKF_MERMAID_JS ${mermaidJs} \
               --prefix PATH : ${pkgs.lib.makeBinPath [pkgs.gitMinimal pkgs.gnutar pkgs.zstd]}
+            wrapProgram $out/bin/okf-migrate \
+              --prefix PATH : ${pkgs.lib.makeBinPath [pkgs.gitMinimal]}
           '';
           inherit (okf-tools-unwrapped) meta;
         };

@@ -14,6 +14,7 @@
 //! `type`, and lists the files a person has to decide. See
 //! [`okf_tools::retype`].
 
+use std::io::Read as _;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -63,13 +64,14 @@ fn run() -> anyhow::Result<ExitCode> {
     let cwd = std::env::current_dir()?;
     let (root, config) = okf_tools::open_bundle(&cwd)?;
     if args.iter().any(|a| a == "--retype") {
-        return retype_run(&root, &config, &prefixes, apply, dry_run);
+        return retype_run(&cwd, &root, &config, &prefixes, apply, dry_run);
     }
-    migrate_run(&root, &config, &prefixes, apply, dry_run)
+    migrate_run(&cwd, &root, &config, &prefixes, apply, dry_run)
 }
 
 /// The migration pass: write the frontmatter a bundle has not got.
 fn migrate_run(
+    repo_root: &Path,
     root: &Path,
     config: &Config,
     prefixes: &[&str],
@@ -86,6 +88,8 @@ fn migrate_run(
     let likely_generated: Vec<_> = plan.likely_generated().collect();
     let undescribed: Vec<_> = plan.undescribed().collect();
     let changes = plan.changes().count();
+    let changed_paths: Vec<&str> = plan.changes().map(|entry| entry.path.as_str()).collect();
+    let pinned = pinned_preflight(repo_root, &changed_paths)?;
 
     if dry_run {
         for entry in plan.changes() {
@@ -159,8 +163,13 @@ fn migrate_run(
             );
         }
     }
+    report_pinned(&pinned);
 
     if apply {
+        if !pinned.is_empty() {
+            println!("Migration refused before any file was written.");
+            return Ok(ExitCode::FAILURE);
+        }
         let written = migrate::apply(root, &plan)?;
         println!("Migrated {written} file(s).");
         // Unmatched files are the whole point of reporting rather than
@@ -183,6 +192,7 @@ fn migrate_run(
 /// the pass that changes 672 documents is not the pass to also derive titles,
 /// write descriptions or normalise quoting.
 fn retype_run(
+    repo_root: &Path,
     root: &Path,
     config: &Config,
     prefixes: &[&str],
@@ -198,6 +208,8 @@ fn retype_run(
 
     let judgements: Vec<_> = plan.judgements().collect();
     let changes = plan.changes().count();
+    let changed_paths: Vec<&str> = plan.changes().map(|entry| entry.path.as_str()).collect();
+    let pinned = pinned_preflight(repo_root, &changed_paths)?;
 
     if dry_run {
         for entry in plan.changes() {
@@ -243,8 +255,13 @@ fn retype_run(
             println!("  {path}: {why}");
         }
     }
+    report_pinned(&pinned);
 
     if apply {
+        if !pinned.is_empty() {
+            println!("Retype refused before any file was written.");
+            return Ok(ExitCode::FAILURE);
+        }
         let written = retype::apply(root, &plan)?;
         println!("Retyped {written} file(s).");
         // Same rule as a migration's unmatched files: the pass is not finished
@@ -257,4 +274,131 @@ fn retype_run(
         println!("{changes} file(s) would change. Nothing written.");
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Refuse to buffer an arbitrarily large tracked file for a textual preflight.
+const MAX_TRACKED_TEXT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_TRACKED_TEXT_TOTAL_BYTES: usize = 256 * 1024 * 1024;
+
+/// Current contents of Git-tracked files that are not Markdown documents.
+fn tracked_non_markdown(repo_root: &Path) -> anyhow::Result<Vec<(String, String)>> {
+    let output = std::process::Command::new("git")
+        .args(["ls-files", "-z"])
+        .current_dir(repo_root)
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git ls-files failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    let mut files = Vec::new();
+    let mut total_bytes = 0_usize;
+    for encoded in output.stdout.split(|byte| *byte == 0) {
+        if encoded.is_empty() {
+            continue;
+        }
+        let path = std::str::from_utf8(encoded)
+            .map_err(|_| anyhow::anyhow!("git reported a tracked path that is not UTF-8"))?;
+        if Path::new(path)
+            .extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+        {
+            continue;
+        }
+
+        let full_path = repo_root.join(path);
+        let metadata = std::fs::symlink_metadata(&full_path).map_err(|source| {
+            anyhow::anyhow!("could not inspect tracked file `{path}`: {source}")
+        })?;
+        let text = if metadata.file_type().is_dir() {
+            continue;
+        } else if metadata.file_type().is_symlink() {
+            std::fs::read_link(&full_path)
+                .map_err(|source| {
+                    anyhow::anyhow!("could not read tracked symlink `{path}`: {source}")
+                })?
+                .to_string_lossy()
+                .into_owned()
+        } else if metadata.file_type().is_file() {
+            let Some(text) = read_tracked_text(&full_path, path)? else {
+                continue;
+            };
+            text
+        } else {
+            anyhow::bail!("tracked path `{path}` is not a regular file, symlink, or directory");
+        };
+        total_bytes = total_bytes
+            .checked_add(text.len())
+            .ok_or_else(|| anyhow::anyhow!("tracked text size overflowed"))?;
+        if total_bytes > MAX_TRACKED_TEXT_TOTAL_BYTES {
+            anyhow::bail!(
+                "tracked non-Markdown text exceeds the {MAX_TRACKED_TEXT_TOTAL_BYTES}-byte preflight limit"
+            );
+        }
+        files.push((path.to_owned(), text));
+    }
+    Ok(files)
+}
+
+fn read_tracked_text(path: &Path, display: &str) -> anyhow::Result<Option<String>> {
+    let file = std::fs::File::open(path)
+        .map_err(|source| anyhow::anyhow!("could not read tracked file `{display}`: {source}"))?;
+    let limit = u64::try_from(MAX_TRACKED_TEXT_BYTES.saturating_add(1))?;
+    let mut bytes = Vec::new();
+    file.take(limit)
+        .read_to_end(&mut bytes)
+        .map_err(|source| anyhow::anyhow!("could not read tracked file `{display}`: {source}"))?;
+    if bytes.contains(&0) {
+        return Ok(None);
+    }
+    if bytes.len() > MAX_TRACKED_TEXT_BYTES {
+        anyhow::bail!(
+            "tracked file `{display}` exceeds the {MAX_TRACKED_TEXT_BYTES}-byte preflight limit"
+        );
+    }
+    Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
+}
+
+fn pinned_preflight(
+    repo_root: &Path,
+    changed_paths: &[&str],
+) -> anyhow::Result<Vec<migrate::PinnedReference>> {
+    if changed_paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tracked = tracked_non_markdown(repo_root)?;
+    migrate::pinned_references(
+        changed_paths.iter().copied(),
+        tracked
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str())),
+    )
+    .map_err(Into::into)
+}
+
+fn report_pinned(references: &[migrate::PinnedReference]) {
+    if references.is_empty() {
+        return;
+    }
+    let file_count = references
+        .iter()
+        .map(|reference| reference.file.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    println!();
+    println!("{file_count} tracked non-Markdown file(s) may pin document bytes:");
+    for reference in references {
+        println!(
+            "  {} <- {}:{} ({} at line {})",
+            reference.document,
+            reference.file,
+            reference.path_line,
+            reference.key,
+            reference.key_line
+        );
+    }
+    println!("Decide what each binding should cover before changing the document bytes.");
 }

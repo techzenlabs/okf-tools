@@ -18,7 +18,7 @@
 //!   or a `generated` frontmatter key leaves the file untouched until its path
 //!   is listed under `[paths] generated`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -172,6 +172,104 @@ impl Plan {
     pub fn changes(&self) -> impl Iterator<Item = &Entry> {
         self.entries.iter().filter(|e| e.rewritten.is_some())
     }
+}
+
+/// A tracked non-Markdown file that may bind one document's exact bytes.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PinnedReference {
+    /// Bundle-relative path of the document that would change.
+    pub document: String,
+    /// Repository-relative path of the file that mentions it.
+    pub file: String,
+    /// One-based line where the document path appears.
+    pub path_line: usize,
+    /// Nearby key that suggests a byte-level binding.
+    pub key: String,
+    /// One-based line where the key appears.
+    pub key_line: usize,
+}
+
+/// How far on either side of a path mention a pin-shaped key may appear.
+///
+/// Manifests usually keep one record within a handful of lines. Twelve is a
+/// conservative textual preflight rather than a claim to parse every manifest
+/// format: a false positive costs one review, while a missed binding lets the
+/// migration invalidate evidence.
+const PIN_CONTEXT_LINES: usize = 12;
+
+static PIN_KEY: LazyLock<regex::Regex> = LazyLock::new(|| {
+    #[expect(
+        clippy::expect_used,
+        reason = "static pattern literal, forced by tests in this module"
+    )]
+    regex::Regex::new(r#"(?i)(?:^|[\s{,])["']?(sha256|digest|byte_length|size|length)["']?\s*[:=]"#)
+        .expect("static regex literal must compile")
+});
+
+/// Find changed documents mentioned near byte-binding keys.
+///
+/// `documents` are bundle-relative paths. `tracked` contains the current text
+/// of Git-tracked non-Markdown files and their repository-relative paths. The
+/// scan deliberately understands only proximity, not the host file's format;
+/// it reports possible bindings for a person to decide rather than asserting
+/// that any digest has a particular meaning.
+///
+/// # Errors
+///
+/// Fails when the set of literal document paths cannot be compiled into the
+/// bounded multi-pattern matcher.
+pub fn pinned_references<'document, 'tracked>(
+    documents: impl IntoIterator<Item = &'document str>,
+    tracked: impl IntoIterator<Item = (&'tracked str, &'tracked str)>,
+) -> Result<Vec<PinnedReference>, regex::Error> {
+    let documents: Vec<&str> = documents.into_iter().collect();
+    if documents.is_empty() {
+        return Ok(Vec::new());
+    }
+    let matcher = regex::RegexSet::new(documents.iter().map(|path| regex::escape(path)))?;
+    let mut references = BTreeSet::new();
+
+    for (file, text) in tracked {
+        let lines: Vec<&str> = text.lines().collect();
+        let keys: Vec<Vec<String>> = lines
+            .iter()
+            .map(|line| {
+                PIN_KEY
+                    .captures_iter(line)
+                    .filter_map(|captures| captures.get(1).map(|key| key.as_str().to_owned()))
+                    .collect()
+            })
+            .collect();
+        if keys.iter().all(Vec::is_empty) {
+            continue;
+        }
+
+        for (path_index, line) in lines.iter().enumerate() {
+            let path_matches = matcher.matches(line);
+            if !path_matches.matched_any() {
+                continue;
+            }
+            let first = path_index.saturating_sub(PIN_CONTEXT_LINES);
+            let last = path_index
+                .saturating_add(PIN_CONTEXT_LINES)
+                .min(lines.len().saturating_sub(1));
+            for document_index in &path_matches {
+                for (key_index, line_keys) in keys.iter().enumerate().take(last + 1).skip(first) {
+                    for key in line_keys {
+                        references.insert(PinnedReference {
+                            document: documents[document_index].to_owned(),
+                            file: file.to_owned(),
+                            path_line: path_index.saturating_add(1),
+                            key: key.to_owned(),
+                            key_line: key_index.saturating_add(1),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(references.into_iter().collect())
 }
 
 /// How many documents must share a paragraph before it stops being a
@@ -662,6 +760,53 @@ mod tests {
                 .collect(),
             ..Config::default()
         }
+    }
+
+    #[test]
+    fn tracked_path_near_byte_binding_keys_is_reported() {
+        let references = pinned_references(
+            ["adr/0001-db.md"],
+            [(
+                "model.json",
+                "{\n  \"path\": \"adr/0001-db.md\",\n  \"byte_length\": 84,\n  \"sha256\": \"fixture\",\n  \"digest\": \"fixture\",\n  \"size\": 84,\n  \"length\": 84\n}\n",
+            )],
+        )
+        .unwrap();
+
+        assert_eq!(references.len(), 5);
+        assert_eq!(references[0].document, "adr/0001-db.md");
+        assert_eq!(references[0].file, "model.json");
+        assert_eq!(references[0].path_line, 2);
+        assert_eq!(references[0].key, "byte_length");
+        assert_eq!(references[0].key_line, 3);
+        let keys: BTreeSet<&str> = references
+            .iter()
+            .map(|reference| reference.key.as_str())
+            .collect();
+        assert_eq!(
+            keys,
+            BTreeSet::from(["byte_length", "digest", "length", "sha256", "size"])
+        );
+    }
+
+    #[test]
+    fn distant_or_non_key_length_words_do_not_report_a_pin() {
+        let mut distant = String::from("length: 84\n");
+        distant.push_str(&"context\n".repeat(PIN_CONTEXT_LINES + 1));
+        distant.push_str("adr/0001-db.md\n");
+        let references = pinned_references(
+            ["adr/0001-db.md"],
+            [
+                ("distant.txt", distant.as_str()),
+                (
+                    "prose.txt",
+                    "adr/0001-db.md has enough length for the example.\n",
+                ),
+            ],
+        )
+        .unwrap();
+
+        assert!(references.is_empty());
     }
 
     #[test]
