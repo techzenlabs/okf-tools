@@ -7,13 +7,16 @@
 //! `sources`, `verified` — is judgement, and a tool that guessed at it would
 //! be asserting things about the knowledge that nobody checked.
 //!
-//! Two refusals are load-bearing:
+//! Three refusals are load-bearing:
 //!
 //! * **No default type.** A file no `[[type_rules]]` entry matches is
 //!   reported and left alone. Guessing `type`, the one field §11 requires,
 //!   would be the same failure as fabricating `verified`.
 //! * **Never overwrite.** An existing key is left exactly as written, which
 //!   is what makes a second run a no-op and a revert a single `git checkout`.
+//! * **Do not edit likely generated files.** A generated marker near the start
+//!   or a `generated` frontmatter key leaves the file untouched until its path
+//!   is listed under `[paths] generated`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -61,6 +64,8 @@ pub enum Skip {
     /// A generator owns the file. Writing here would be truncated on the next
     /// regeneration, and the freshness gate would then fail closed.
     Generated,
+    /// The file looks generated but `[paths] generated` does not classify it.
+    LikelyGenerated(GeneratedSignal),
     /// No `[[type_rules]]` entry matched, so `type` is a human's call.
     NoTypeRule,
     /// The frontmatter is malformed. Migrating into a broken block would
@@ -76,9 +81,28 @@ impl Skip {
         match self {
             Self::Reserved => "reserved".to_owned(),
             Self::Generated => "generated".to_owned(),
+            Self::LikelyGenerated(signal) => format!("likely-generated: {}", signal.label()),
             Self::NoTypeRule => "no-type-rule".to_owned(),
             Self::Unparseable(why) => format!("unparseable: {why}"),
             Self::AlreadyMigrated => "already-migrated".to_owned(),
+        }
+    }
+}
+
+/// The content signal that made an unclassified file look generated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeneratedSignal {
+    /// A generated or do-not-edit marker appeared near the start.
+    Marker,
+    /// The existing frontmatter contains a top-level `generated` key.
+    FrontmatterKey,
+}
+
+impl GeneratedSignal {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Marker => "marker near start",
+            Self::FrontmatterKey => "`generated` frontmatter key",
         }
     }
 }
@@ -129,6 +153,14 @@ impl Plan {
             .filter(|e| matches!(e.skip, Some(Skip::NoTypeRule)))
     }
 
+    /// Files whose contents suggest a generator owns them, but whose paths
+    /// are not classified under `[paths] generated`.
+    pub fn likely_generated(&self) -> impl Iterator<Item = &Entry> {
+        self.entries
+            .iter()
+            .filter(|e| matches!(e.skip, Some(Skip::LikelyGenerated(_))))
+    }
+
     /// Files that would be migrated but have no description anyone can derive.
     pub fn undescribed(&self) -> impl Iterator<Item = &Entry> {
         self.entries
@@ -157,6 +189,11 @@ const BOILERPLATE_SHARED_BY: usize = 10;
 /// estate two rounds settle it. Eight is a backstop against a pathological
 /// corpus rather than a number anything depends on.
 const BOILERPLATE_ROUNDS: usize = 8;
+
+/// Only the opening lines count as a whole-file ownership marker. A generated
+/// block later in a hand-written document does not make its frontmatter unsafe
+/// to migrate.
+const GENERATED_MARKER_LINES: usize = 8;
 
 /// Work out what migration would do, writing nothing.
 ///
@@ -254,6 +291,9 @@ fn open<'a>(relative: &str, text: &'a str, config: &Config) -> Result<Opened<'a>
     if config.is_generated(relative) {
         return Err(Skip::Generated);
     }
+    if has_generated_marker(text) {
+        return Err(Skip::LikelyGenerated(GeneratedSignal::Marker));
+    }
 
     let (existing, body) = match parse_strict(text) {
         Ok(fm) => (Some(fm), strip_frontmatter(text)),
@@ -263,6 +303,12 @@ fn open<'a>(relative: &str, text: &'a str, config: &Config) -> Result<Opened<'a>
         }
         Err(other) => return Err(Skip::Unparseable(other.message())),
     };
+    if existing
+        .as_ref()
+        .is_some_and(|fm| fm.keys().any(|key| key == "generated"))
+    {
+        return Err(Skip::LikelyGenerated(GeneratedSignal::FrontmatterKey));
+    }
 
     let written_type = existing
         .as_ref()
@@ -285,6 +331,53 @@ fn open<'a>(relative: &str, text: &'a str, config: &Config) -> Result<Opened<'a>
         rule,
         type_existed,
     })
+}
+
+/// Whether the opening lines carry a whole-file generated marker.
+///
+/// HTML comments are scanned across line boundaries. An H1 ending in
+/// `(generated)` is also a common self-declaration. Both checks stop after the
+/// opening lines so a generated block inside hand-written prose stays safe.
+fn has_generated_marker(text: &str) -> bool {
+    let mut in_comment = false;
+    for line in text.lines().take(GENERATED_MARKER_LINES) {
+        let lower = line.to_ascii_lowercase();
+        let trimmed = lower.trim();
+        if trimmed
+            .strip_prefix("# ")
+            .is_some_and(|heading| heading.trim_end().ends_with("(generated)"))
+        {
+            return true;
+        }
+
+        let mut remaining = lower.as_str();
+        loop {
+            if !in_comment {
+                let Some(start) = remaining.find("<!--") else {
+                    break;
+                };
+                remaining = remaining.get(start.saturating_add(4)..).unwrap_or_default();
+                in_comment = true;
+            }
+
+            let (comment, rest) = remaining
+                .split_once("-->")
+                .map_or((remaining, None), |(comment, rest)| (comment, Some(rest)));
+            let marks_generated_block =
+                comment.contains("begin generated") || comment.contains("end generated");
+            if !marks_generated_block
+                && (comment.contains("generated") || comment.contains("do not edit"))
+            {
+                return true;
+            }
+            let Some(rest) = rest else {
+                break;
+            };
+            in_comment = false;
+            remaining = rest;
+        }
+    }
+    false
 }
 
 /// Every string a document offers as its description: the one already written
@@ -625,11 +718,55 @@ mod tests {
         };
         let entry = plan_one(
             "generated/inventory.md",
-            "# I\n\nProse.\n",
+            "<!-- GENERATED: do not edit -->\n# I\n\nProse.\n",
             &config,
             &HashSet::new(),
         );
         assert_eq!(entry.skip, Some(Skip::Generated));
+        assert!(entry.rewritten.is_none());
+    }
+
+    #[test]
+    fn a_generated_block_in_a_hand_written_file_is_not_a_marker() {
+        let config = config_with(&[("**/*.md", "Reference")]);
+        let text = "# Catalog\n\n<!-- BEGIN GENERATED CATALOG -->\nGenerated rows.\n<!-- END GENERATED CATALOG -->\n\nThis introduction is hand-written.\n";
+        let entry = plan_one("catalog.md", text, &config, &HashSet::new());
+
+        assert!(entry.skip.is_none());
+        assert!(entry.rewritten.is_some());
+    }
+
+    #[test]
+    fn a_generated_marker_near_the_start_is_reported_and_left_alone() {
+        let config = config_with(&[("**/*.md", "Reference")]);
+        let entry = plan_one(
+            "inventory.md",
+            "<!--\nThis file is generated. DO NOT EDIT.\n-->\n\n# Inventory\n\nProse.\n",
+            &config,
+            &HashSet::new(),
+        );
+
+        assert_eq!(
+            entry.skip.as_ref().map(Skip::label),
+            Some("likely-generated: marker near start".to_owned())
+        );
+        assert!(entry.rewritten.is_none());
+    }
+
+    #[test]
+    fn a_generated_frontmatter_key_is_reported_and_left_alone() {
+        let config = config_with(&[("**/*.md", "Reference")]);
+        let entry = plan_one(
+            "inventory.md",
+            "---\ngenerated: { by: InventoryTool, at: 2026-08-29 }\n---\n\n# Inventory\n\nProse.\n",
+            &config,
+            &HashSet::new(),
+        );
+
+        assert_eq!(
+            entry.skip.as_ref().map(Skip::label),
+            Some("likely-generated: `generated` frontmatter key".to_owned())
+        );
         assert!(entry.rewritten.is_none());
     }
 
