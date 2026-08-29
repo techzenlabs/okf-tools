@@ -414,6 +414,13 @@ h1, h2, h3 { line-height: 1.25; }
     align-items: start;
   }
 
+  /* The crumb sits outside the shell (it must not join the indexed body),
+     so it does not inherit the grid. Pad its text over to the content
+     column — 15rem of nav plus the 2.5rem gutter — so the trail and the
+     page's first line start at the same edge; the hairline under it stays
+     full width, like the header's. */
+  .okf-crumb { padding-inline-start: 17.5rem; }
+
   .okf-nav-toggle { display: none; }
 
   .okf-sidenav {
