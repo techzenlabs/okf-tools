@@ -1,0 +1,64 @@
+{{- /*
+  One section of the left navigation tree, as a `<li>`, recursively.
+
+  Rendered as `<details>` so a branch opens and closes with JavaScript off,
+  which is the same posture every fold in this layout set takes. The branch
+  holding the current page ships `open` down to the page itself; every other
+  branch ships closed with its children present in the markup, because a
+  closed `<details>` a reader can open is the whole point and there is no
+  script to fetch anything later.
+
+  The partition and its order are `list.html`'s: documents first, then
+  subsections, each sorted by `RelPermalink` — the one key the estate's
+  listings, sibling navs and Previous/Next already walk, so the column never
+  disagrees with the page it sits beside.
+
+  Titles go through the `title` region for the reason the breadcrumb's do:
+  OKF §8 means a non-root section has no `title` at all, and `.Title` alone
+  renders an anchor with nothing inside it.
+
+  The current page is a marked `<span>` and never a self-link — the same
+  rule the sibling list and the peer strip already enforce. `aria-current`
+  is the accessible form of the mark.
+
+  The caller wraps this in `<nav … data-pagefind-ignore>`; nothing here
+  needs the attribute again.
+*/ -}}
+{{- $s := .section }}
+{{- $current := .current }}
+{{- $docs := sort (where $s.Pages "Kind" "page") "RelPermalink" }}
+{{- $secs := sort (where $s.Pages "Kind" "ne" "page") "RelPermalink" }}
+{{- $title := partial "okf-meta.html" (dict "page" $s "region" "title") }}
+<li>
+  {{- if or $docs $secs }}
+  <details{{ if or ($s.Eq $current) ($s.IsAncestor $current) }} open{{ end }}>
+    <summary>
+      {{- if $s.Eq $current }}
+      <span class="okf-tree-here" aria-current="page">{{ $title }}</span>
+      {{- else }}
+      <a href="{{ $s.RelPermalink }}">{{ $title }}</a>
+      {{- end }}
+    </summary>
+    <ul>
+      {{- range $docs }}
+      <li>
+        {{- if .Eq $current }}
+        <span class="okf-tree-here" aria-current="page">{{ partial "okf-meta.html" (dict "page" . "region" "title") }}</span>
+        {{- else }}
+        <a href="{{ .RelPermalink }}">{{ partial "okf-meta.html" (dict "page" . "region" "title") }}</a>
+        {{- end }}
+      </li>
+      {{- end }}
+      {{- range $secs }}
+      {{- partial "okf-tree.html" (dict "section" . "current" $current) }}
+      {{- end }}
+    </ul>
+  </details>
+  {{- else }}
+  {{- if $s.Eq $current }}
+  <span class="okf-tree-here" aria-current="page">{{ $title }}</span>
+  {{- else }}
+  <a href="{{ $s.RelPermalink }}">{{ $title }}</a>
+  {{- end }}
+  {{- end }}
+</li>

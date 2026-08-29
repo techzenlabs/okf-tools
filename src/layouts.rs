@@ -26,7 +26,7 @@ pub struct SharedFile {
     pub contents: &'static str,
 }
 
-/// The twelve layout files every tenant renders through.
+/// The thirteen layout files every tenant renders through.
 pub const LAYOUTS: &[SharedFile] = &[
     SharedFile {
         path: "layouts/_default/baseof.html",
@@ -55,6 +55,10 @@ pub const LAYOUTS: &[SharedFile] = &[
     SharedFile {
         path: "layouts/partials/okf-search.html",
         contents: include_str!("../site/layouts/partials/okf-search.html"),
+    },
+    SharedFile {
+        path: "layouts/partials/okf-tree.html",
+        contents: include_str!("../site/layouts/partials/okf-tree.html"),
     },
     SharedFile {
         path: "layouts/_default/single.okfmarkdown.md",
@@ -161,14 +165,14 @@ pub fn unignored<'a>(
 mod tests {
     use super::*;
 
-    /// Twelve layouts, and the count is asserted because the set is a
+    /// Thirteen layouts, and the count is asserted because the set is a
     /// contract: a file added here has to be added to the gate's list in the
     /// same edit, or a tenant could fork the new one and nothing would say so.
     #[test]
-    fn the_shared_set_is_twelve_layouts_and_two_siblings() {
-        assert_eq!(LAYOUTS.len(), 12);
+    fn the_shared_set_is_thirteen_layouts_and_two_siblings() {
+        assert_eq!(LAYOUTS.len(), 13);
         assert_eq!(SHARED.len(), 2);
-        assert_eq!(owned_paths().len(), 14);
+        assert_eq!(owned_paths().len(), 15);
     }
 
     #[test]

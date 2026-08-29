@@ -58,18 +58,50 @@
            row: seven levels deep the trail wraps, and wrapping is fine. */}}
     {{- partial "okf-meta.html" (dict "page" . "region" "breadcrumb") }}
 
-    <main data-pagefind-body>
-      {{ block "main" . }}{{ end }}
-      {{- /* Every page but the two that are not documents. Trust and
-             staleness are claims a document makes about itself; the 404 has
-             none to make, and neither does the front door, which since the
-             card grid replaced the listing carries no document at all. A
-             tenant root reading `TRUST: unverified` invited the reader to
-             distrust the site rather than a page. */}}
-      {{- if and (ne .Kind "404") (not .IsHome) }}
-      {{- partial "okf-meta.html" (dict "page" . "region" "facets") }}
-      {{- end }}
-    </main>
+    {{- /* The left navigation column (#33): every bundle, the branch under
+           the current page open down to the page, everything else closed.
+           `<details>` all the way down, so it works with JavaScript off;
+           the checkbox is the no-script mobile toggle, `:checked` shows
+           the column under 900px and the label is the control. The
+           checkbox must stay a *preceding sibling* of `.okf-shell` or the
+           `~` selector in okf.css stops reaching the column.
+
+           `data-pagefind-ignore` on the `<nav>` is load-bearing: the
+           column renders on all pages, and indexed it would put a copy of
+           the section tree in every page's search excerpt. Top-level
+           order is the front door's: the display name a reader sees, not
+           `.Title`, which a bundle root need not carry. */}}
+    {{- $page := . }}
+    <input type="checkbox" id="okf-nav-state" class="okf-nav-state" />
+    <div class="okf-shell">
+      <label class="okf-nav-toggle" for="okf-nav-state">Sections</label>
+      <nav class="okf-sidenav" data-pagefind-ignore aria-label="Site sections">
+        {{- $bundles := slice }}
+        {{- range site.Sections }}
+        {{- $bundles = $bundles | append (dict
+            "page" .
+            "name" (partial "okf-meta.html" (dict "page" . "region" "title"))) }}
+        {{- end }}
+        <ul class="okf-tree">
+          {{- range sort $bundles "name" }}
+          {{- partial "okf-tree.html" (dict "section" .page "current" $page) }}
+          {{- end }}
+        </ul>
+      </nav>
+
+      <main data-pagefind-body>
+        {{ block "main" . }}{{ end }}
+        {{- /* Every page but the two that are not documents. Trust and
+               staleness are claims a document makes about itself; the 404 has
+               none to make, and neither does the front door, which since the
+               card grid replaced the listing carries no document at all. A
+               tenant root reading `TRUST: unverified` invited the reader to
+               distrust the site rather than a page. */}}
+        {{- if and (ne .Kind "404") (not .IsHome) }}
+        {{- partial "okf-meta.html" (dict "page" . "region" "facets") }}
+        {{- end }}
+      </main>
+    </div>
 
     <footer class="okf-footer">
       <a href="{{ "build-lock.json" | relURL }}">build provenance</a>
