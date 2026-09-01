@@ -221,8 +221,8 @@
               # assertion that keeps it asking. --include, because pagefind's
               # index holds page fragments and a false hit there would read
               # as markup.
-              if grep -rq --include='*.html' 'rel="icon"\|okf-mark' "$SITE"; then
-                grep -rl --include='*.html' 'rel="icon"\|okf-mark' "$SITE" | head >&2
+              if grep -rq --include='*.html' 'rel="icon"\|okf-mark\|tenant-brand' "$SITE"; then
+                grep -rl --include='*.html' 'rel="icon"\|okf-mark\|tenant-brand' "$SITE" | head >&2
                 fail "a tenant that ships no brand files still linked one"
               fi
               touch $out

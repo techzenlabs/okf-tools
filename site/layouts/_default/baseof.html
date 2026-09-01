@@ -58,6 +58,16 @@
     <link rel="apple-touch-icon" href="{{ "apple-touch-icon.png" | relURL }}" />
     {{- end }}
     <link rel="stylesheet" href="{{ "css/okf.css" | relURL }}" />
+    {{- /* The tenant's own stylesheet, by the same convention as the icons
+           above: `static/css/tenant-brand.css` gets linked when the tenant
+           ships it, and a tenant that ships none emits no link. It loads
+           *after* okf.css on purpose — equal-specificity rules win on
+           source order, so a tenant restyles by redefining the custom
+           properties and token classes rather than by forking the shared
+           stylesheet, which `okf-check --layouts` refuses. */ -}}
+    {{- if os.FileExists "static/css/tenant-brand.css" }}
+    <link rel="stylesheet" href="{{ "css/tenant-brand.css" | relURL }}" />
+    {{- end }}
     {{- with .OutputFormats.Get "okfmarkdown" }}
     <link rel="alternate" type="text/markdown" href="{{ .RelPermalink }}" />
     {{- end }}
