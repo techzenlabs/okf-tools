@@ -400,6 +400,207 @@ fn only_markdown_and_allowlisted_assets_reach_the_content_tree() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Assemble the subdir-mounted fixture tenant, whose one bundle takes `docs/`
+/// from a tree that also holds `scripts/` and `schemas/`.
+fn assemble_subdir_fixture(
+    label: &str,
+    max_asset_bytes: Option<u64>,
+) -> (PathBuf, Result<assemble::Outcome, assemble::AssembleError>) {
+    let root = scratch(label);
+    let mut manifest = Manifest::load(&fixture("site/tenant-subdir/site.toml")).unwrap_or_default();
+    if max_asset_bytes.is_some() {
+        manifest.max_asset_bytes = max_asset_bytes;
+    }
+    let mut locals = BTreeMap::new();
+    locals.insert("gamma".to_owned(), fixture("site/gamma"));
+    let mut options = Options::new(root.clone());
+    options.locals = locals;
+    options.mermaid = Some(fixture("site/tenant-subdir/site.toml"));
+    let outcome = assemble::assemble(&manifest, &options);
+    (root, outcome)
+}
+
+/// The referenced-files pass, over every link shape the fixture carries: two
+/// files leave the subdir and mount under `/_files/`, and every link that must
+/// not be touched — a directory, a dead target, an extension off the
+/// allowlist, a path leaving the repository — stays exactly as written.
+#[test]
+fn a_referenced_file_outside_the_subdir_is_mounted_and_its_link_rewritten() {
+    let (root, outcome) = assemble_subdir_fixture("refassets", None);
+    let outcome = outcome.unwrap_or_default();
+    assert_eq!(outcome.referenced, 2);
+
+    assert!(root.join("static/_files/gamma/scripts/deploy.sh").is_file());
+    assert!(
+        root.join("static/_files/gamma/schemas/thing.json")
+            .is_file()
+    );
+    // Off the allowlist, and outside the repository: neither mounts.
+    assert!(!root.join("static/_files/gamma/scripts/secret.pem").exists());
+    assert!(!root.join("static/_files/gamma/outside.sh").exists());
+
+    let guide = std::fs::read_to_string(root.join("content/gamma/guide.md")).unwrap_or_default();
+    assert!(
+        guide.contains("](/_files/gamma/scripts/deploy.sh)"),
+        "{guide}"
+    );
+    assert!(
+        guide.contains("](/_files/gamma/schemas/thing.json)"),
+        "{guide}"
+    );
+    // The in-docs asset takes the ordinary route, not the `/_files/` one.
+    assert!(guide.contains("](/gamma/data.json)"), "{guide}");
+    // §11 makes a broken link a link: each of these stays as written.
+    assert!(guide.contains("](../scripts/)"), "{guide}");
+    assert!(guide.contains("](../missing.sh)"), "{guide}");
+    assert!(guide.contains("](../scripts/secret.pem)"), "{guide}");
+    assert!(guide.contains("](../../outside.sh)"), "{guide}");
+
+    // The same file linked from one level deeper: one copy, one URL.
+    let nested =
+        std::fs::read_to_string(root.join("content/gamma/sub/nested.md")).unwrap_or_default();
+    assert!(
+        nested.contains("](/_files/gamma/scripts/deploy.sh)"),
+        "{nested}"
+    );
+
+    // Every non-markdown byte copied for the bundle is on its account.
+    let expected: u64 = ["scripts/deploy.sh", "schemas/thing.json", "docs/data.json"]
+        .iter()
+        .map(|p| {
+            std::fs::metadata(fixture("site/gamma").join(p))
+                .map(|m| m.len())
+                .unwrap_or_default()
+        })
+        .sum();
+    assert!(expected > 0);
+    assert_eq!(outcome.asset_bytes, [("gamma".to_owned(), expected)]);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The payload cap fails the build the moment it is crossed, naming the
+/// spender, rather than measuring after everything landed.
+#[test]
+fn an_asset_payload_past_the_budget_refuses_the_assembly() {
+    let (root, outcome) = assemble_subdir_fixture("budget", Some(1));
+    let err = outcome.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(err.contains("max_asset_bytes"), "{err}");
+    assert!(err.contains("gamma:"), "{err}");
+    assert!(err.contains("blob storage"), "{err}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A second run rebuilds `/_files/` from empty, so a link removed upstream
+/// takes its copy with it rather than serving stale forever.
+#[test]
+fn a_second_assembly_rebuilds_the_mounted_references_from_empty() {
+    let (root, first) = assemble_subdir_fixture("refassets-again", None);
+    let first = first.unwrap_or_default();
+    let stale = root.join("static/_files/gamma/left-behind.sh");
+    let _ = std::fs::write(&stale, "echo stale");
+
+    let mut manifest = Manifest::load(&fixture("site/tenant-subdir/site.toml")).unwrap_or_default();
+    manifest.max_asset_bytes = None;
+    let mut locals = BTreeMap::new();
+    locals.insert("gamma".to_owned(), fixture("site/gamma"));
+    let mut options = Options::new(root.clone());
+    options.locals = locals;
+    options.mermaid = Some(fixture("site/tenant-subdir/site.toml"));
+    let second = assemble::assemble(&manifest, &options).unwrap_or_default();
+
+    assert_eq!(first.referenced, second.referenced);
+    assert_eq!(first.asset_bytes, second.asset_bytes);
+    assert!(!stale.exists());
+    assert!(root.join("static/_files/gamma/scripts/deploy.sh").is_file());
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A symlink out of the bundle tree is refused, not followed.
+///
+/// A copy would follow it, publishing whatever it points at and charging the
+/// budget from symlink-target metadata that a special file is free to lie
+/// about. The fixture is built at runtime: a copy of gamma whose docs gain a
+/// `leak.json` pointing above the bundle root at a file the allowlist would
+/// otherwise take.
+#[test]
+fn a_symlink_escaping_the_bundle_is_not_copied() {
+    let staging = scratch("symlink-staging");
+    let bundle = staging.join("gamma");
+    copy_dir(&fixture("site/gamma"), &bundle);
+    let _ = std::fs::write(staging.join("outside-secret.json"), "{\"leak\": true}");
+    #[cfg(unix)]
+    let _ = std::os::unix::fs::symlink(
+        staging.join("outside-secret.json"),
+        bundle.join("docs/leak.json"),
+    );
+
+    let root = scratch("symlink");
+    let mut manifest = Manifest::load(&fixture("site/tenant-subdir/site.toml")).unwrap_or_default();
+    manifest.max_asset_bytes = None;
+    let mut locals = BTreeMap::new();
+    locals.insert("gamma".to_owned(), bundle);
+    let mut options = Options::new(root.clone());
+    options.locals = locals;
+    options.mermaid = Some(fixture("site/tenant-subdir/site.toml"));
+    let outcome = assemble::assemble(&manifest, &options).unwrap_or_default();
+
+    assert!(outcome.files > 0);
+    assert!(!root.join("content/gamma/leak.json").exists());
+    // The in-tree assets still copied and were the only bytes charged.
+    assert!(root.join("content/gamma/data.json").is_file());
+
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&staging);
+}
+
+/// A subdir that is itself a symlink out of the repository is refused, not
+/// followed — every per-file containment check downstream measures against
+/// the resolved directory and would miss the escape entirely.
+#[test]
+fn a_subdir_that_resolves_outside_the_tree_refuses_the_assembly() {
+    let staging = scratch("subdir-escape-staging");
+    let bundle = staging.join("gamma");
+    let _ = std::fs::create_dir_all(&bundle);
+    let outside = staging.join("elsewhere");
+    let _ = std::fs::create_dir_all(&outside);
+    let _ = std::fs::write(outside.join("planted.md"), "# Planted\n");
+    #[cfg(unix)]
+    let _ = std::os::unix::fs::symlink(&outside, bundle.join("docs"));
+
+    let root = scratch("subdir-escape");
+    let manifest = Manifest::load(&fixture("site/tenant-subdir/site.toml")).unwrap_or_default();
+    let mut locals = BTreeMap::new();
+    locals.insert("gamma".to_owned(), bundle);
+    let mut options = Options::new(root.clone());
+    options.locals = locals;
+    options.mermaid = Some(fixture("site/tenant-subdir/site.toml"));
+    let err = assemble::assemble(&manifest, &options)
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+
+    assert!(err.contains("resolves outside the fetched tree"), "{err}");
+    assert!(!root.join("content/gamma/planted.md").exists());
+
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&staging);
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    let _ = std::fs::create_dir_all(to);
+    for entry in std::fs::read_dir(from).into_iter().flatten().flatten() {
+        let source = entry.path();
+        let target = to.join(entry.file_name());
+        if source.is_dir() {
+            copy_dir(&source, &target);
+        } else {
+            let _ = std::fs::copy(&source, &target);
+        }
+    }
+}
+
 /// A pin bump changes the rev and not one other byte.
 ///
 /// The defect this gates: `--update` wrote the manifest back through the TOML

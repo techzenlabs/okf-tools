@@ -1,0 +1,23 @@
+{{- /* A link to a file downloads instead of navigating away to raw bytes.
+
+Whether a target is a file is read from the href assembly wrote, not
+guessed from context: internal (leading slash), and the *path* — parsed,
+so a dot inside a fragment or query never counts — ends in an extension.
+The rewrite preserves an author's `#usage` on a file link, and a page
+link ends in a slash by construction, so `/x/page/#release.v1` navigates
+while `/_files/x/scripts/support.sh#usage` downloads. A bare fragment has
+no leading slash; an external link keeps the browser's own behaviour,
+since `download` is ignored cross-origin anyway. This covers both
+surfaces one rewrite produces: an asset beside its page
+(`/x/status/programs.json`) and a mounted reference from outside the
+subdir (`/_files/x/scripts/support.sh`).
+*/ -}}
+{{- $download := false -}}
+{{- if strings.HasPrefix .Destination "/" -}}
+  {{- with urls.Parse .Destination -}}
+    {{- if findRE `\.[A-Za-z0-9]+$` .Path -}}{{- $download = true -}}{{- end -}}
+  {{- end -}}
+{{- end -}}
+<a href="{{ .Destination | safeURL }}"{{ with .Title }} title="{{ . }}"{{ end }}{{ if $download }} download{{ end }}>{{ .Text | safeHTML }}</a>
+{{- /* The hook renders inline; the trim above keeps the file's final
+newline out of every paragraph a link sits in. */ -}}

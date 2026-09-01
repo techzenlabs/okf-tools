@@ -75,6 +75,12 @@ pub enum AssembleError {
         rev: String,
     },
     #[error(
+        "bundle `{id}`: subdir `{subdir}` resolves outside the fetched tree. \
+         A subdir that is a symlink out of its own repository would publish \
+         whatever it points at, so it is refused rather than followed"
+    )]
+    SubdirEscapes { id: String, subdir: String },
+    #[error(
         "mermaid.min.js was not found. Set OKF_MERMAID_JS or pass --mermaid \
          <path>; the nix package wires it to nixpkgs#mermaid-cli, and it is \
          copied rather than executed"
@@ -92,6 +98,74 @@ pub enum AssembleError {
          other. Delete the _index.md: okf-assemble writes it"
     )]
     ListingWouldBeOverwritten { id: String, dir: String },
+    #[error(
+        "the asset payload passed max_asset_bytes at {limit} bytes ({breakdown}). \
+         Every copied asset ships inside the site image, and this failing is \
+         the signal that was asked for. Either raise max_asset_bytes in \
+         site.toml as a deliberate act, or move the bulk files to blob \
+         storage and link them by URL"
+    )]
+    AssetBudget { limit: u64, breakdown: String },
+}
+
+/// The asset payload cap, spent as the copying happens.
+///
+/// Charged *before* each copy rather than measured after the run, so an
+/// oversized payload fails without first landing on disk — the cap is spent
+/// during the work it bounds. What counts is every non-markdown byte a bundle
+/// contributes: the allowlisted assets beside the markdown, and the
+/// referenced files [`crate::refassets`] mounts. Markdown is the site's
+/// substance and is not what this budget watches.
+pub(crate) struct Budget {
+    limit: u64,
+    by_bundle: Vec<(String, u64)>,
+}
+
+impl Budget {
+    pub(crate) fn new(limit: u64) -> Self {
+        Self {
+            limit,
+            by_bundle: Vec::new(),
+        }
+    }
+
+    /// Open the account for the bundle about to copy.
+    pub(crate) fn enter(&mut self, id: &str) {
+        self.by_bundle.push((id.to_owned(), 0));
+    }
+
+    /// Charge one file's bytes, failing the moment the cap is crossed.
+    pub(crate) fn charge(&mut self, bytes: u64) -> Result<(), AssembleError> {
+        if let Some(current) = self.by_bundle.last_mut() {
+            current.1 = current.1.saturating_add(bytes);
+        }
+        if self.spent() > self.limit {
+            return Err(AssembleError::AssetBudget {
+                limit: self.limit,
+                breakdown: self.breakdown(),
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn spent(&self) -> u64 {
+        self.by_bundle
+            .iter()
+            .fold(0u64, |sum, (_, bytes)| sum.saturating_add(*bytes))
+    }
+
+    pub(crate) fn by_bundle(&self) -> &[(String, u64)] {
+        &self.by_bundle
+    }
+
+    fn breakdown(&self) -> String {
+        self.by_bundle
+            .iter()
+            .filter(|(_, bytes)| *bytes > 0)
+            .map(|(id, bytes)| format!("{id}: {bytes}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 /// Every collision this run found, one per line, naming both source files and
@@ -186,6 +260,12 @@ pub struct Outcome {
     pub files: usize,
     pub renamed: usize,
     pub rewritten: usize,
+    /// Files referenced from outside their bundle's subdir and mounted under
+    /// `static/_files/`.
+    pub referenced: usize,
+    /// What each bundle's assets cost against `max_asset_bytes`: every
+    /// non-markdown byte copied for it, in manifest order.
+    pub asset_bytes: Vec<(String, u64)>,
     pub local: Vec<String>,
     /// Bundles assembled from a `--pinned` source whose rev matched the
     /// manifest. Verified pins, never stamped.
@@ -220,16 +300,28 @@ pub fn assemble(manifest: &Manifest, options: &Options) -> Result<Outcome, Assem
 
     let content = options.content();
     reset_dir(&content)?;
+    // Rebuilt from empty the way `content/` is, so a link removed upstream
+    // does not leave last run's copy serving under `/_files/`.
+    let files_root = options.root.join("static/_files");
+    if files_root.exists() {
+        std::fs::remove_dir_all(&files_root)
+            .map_err(io(format!("clearing {}", files_root.display())))?;
+    }
 
     let extensions = manifest.asset_extensions();
+    let mut budget = Budget::new(manifest.asset_budget());
     let mut outcome = Outcome::default();
     let mut collisions: Vec<(String, Collision)> = Vec::new();
     for bundle in &manifest.bundles {
+        budget.enter(&bundle.id);
         let source = source_tree(bundle, options, &mut outcome)?;
         let dest = content.join(&bundle.id);
-        outcome.files = outcome
-            .files
-            .saturating_add(copy_bundle(&source, &dest, &extensions)?);
+        outcome.files = outcome.files.saturating_add(copy_bundle(
+            &source.docs,
+            &dest,
+            &extensions,
+            &mut budget,
+        )?);
         // Before the rename, so the paths reported are the ones an author will
         // find in the bundle repository rather than the `_index.md` this step
         // is about to write.
@@ -241,15 +333,26 @@ pub fn assemble(manifest: &Manifest, options: &Options) -> Result<Outcome, Assem
         outcome.renamed = outcome
             .renamed
             .saturating_add(rename_indexes(&dest, &bundle.id)?);
+        let bundle_files = files_root.join(&bundle.id);
+        outcome.referenced = outcome.referenced.saturating_add(crate::refassets::mount(
+            &dest,
+            &source.tree,
+            &bundle.subdir,
+            &bundle_files,
+            &extensions,
+            &mut budget,
+        )?);
         outcome.rewritten = outcome
             .rewritten
             .saturating_add(crate::sitelinks::rewrite_tree(
                 &dest,
                 &bundle.id,
                 &bundle.site_absolute_base,
+                Some((bundle.subdir.as_str(), bundle_files.as_path())),
             )?);
         outcome.bundles = outcome.bundles.saturating_add(1);
     }
+    outcome.asset_bytes = budget.by_bundle().to_vec();
     // After every bundle, so one run names every collision the tenant has
     // rather than the first one it walked into.
     if !collisions.is_empty() {
@@ -271,13 +374,24 @@ pub fn assemble(manifest: &Manifest, options: &Options) -> Result<Outcome, Assem
     Ok(outcome)
 }
 
+/// One bundle's source on disk: the whole fetched tree, and the subdir the
+/// mount takes from it.
+///
+/// Both matter. `docs` is what copies beside the markdown; `tree` is what a
+/// document's `../../scripts/x.sh` resolves against, because the fetch always
+/// brought the whole repository and `subdir` only narrowed the copy.
+struct Source {
+    tree: PathBuf,
+    docs: PathBuf,
+}
+
 /// Where this bundle's files come from: a working tree, a verified pinned
 /// source, or a pinned fetch.
 fn source_tree(
     bundle: &Bundle,
     options: &Options,
     outcome: &mut Outcome,
-) -> Result<PathBuf, AssembleError> {
+) -> Result<Source, AssembleError> {
     if let Some(local) = options.locals.get(&bundle.id) {
         if !local.is_dir() {
             return Err(AssembleError::LocalMissing {
@@ -316,20 +430,38 @@ fn source_tree(
     subdir_of(bundle, &work)
 }
 
-fn subdir_of(bundle: &Bundle, tree: &Path) -> Result<PathBuf, AssembleError> {
-    let root = if bundle.subdir == "." {
+fn subdir_of(bundle: &Bundle, tree: &Path) -> Result<Source, AssembleError> {
+    let docs = if bundle.subdir == "." {
         tree.to_path_buf()
     } else {
         tree.join(&bundle.subdir)
     };
-    if !root.is_dir() {
+    if !docs.is_dir() {
         return Err(AssembleError::SubdirMissing {
             id: bundle.id.clone(),
             subdir: bundle.subdir.clone(),
             rev: bundle.rev.clone(),
         });
     }
-    Ok(root)
+    // The subdir itself could be a symlink out of the repository, and every
+    // per-file containment check downstream would then measure against the
+    // escape rather than catch it.
+    let (Ok(real_tree), Ok(real_docs)) = (tree.canonicalize(), docs.canonicalize()) else {
+        return Err(AssembleError::SubdirEscapes {
+            id: bundle.id.clone(),
+            subdir: bundle.subdir.clone(),
+        });
+    };
+    if !real_docs.starts_with(&real_tree) {
+        return Err(AssembleError::SubdirEscapes {
+            id: bundle.id.clone(),
+            subdir: bundle.subdir.clone(),
+        });
+    }
+    Ok(Source {
+        tree: tree.to_path_buf(),
+        docs,
+    })
 }
 
 /// Fetch exactly the pinned commit, and never the branch.
@@ -389,8 +521,23 @@ fn fetch(bundle: &Bundle, work: &Path) -> Result<(), AssembleError> {
 /// An allowlist rather than a filter, because a bundle holds more than its
 /// documents: mail archives, tokens, signed agreements, build output. What
 /// reaches the site is what somebody named.
-fn copy_bundle(source: &Path, dest: &Path, extensions: &[String]) -> Result<usize, AssembleError> {
+///
+/// A symlink that resolves outside the source tree is refused, the same
+/// stance `okf-serve` and the referenced-files pass take. A copy would follow
+/// it, publishing whatever it points at — and charging the budget from
+/// symlink-target metadata that a special file is free to lie about. Inside
+/// the tree, a git checkout holds only regular files, whose size is the
+/// truth the charge needs.
+fn copy_bundle(
+    source: &Path,
+    dest: &Path,
+    extensions: &[String],
+    budget: &mut Budget,
+) -> Result<usize, AssembleError> {
     std::fs::create_dir_all(dest).map_err(io(format!("creating {}", dest.display())))?;
+    let real_source = source
+        .canonicalize()
+        .map_err(io(format!("resolving {}", source.display())))?;
     let mut copied = 0usize;
     let mut stack = vec![(source.to_path_buf(), dest.to_path_buf())];
     while let Some((from, to)) = stack.pop() {
@@ -408,8 +555,20 @@ fn copy_bundle(source: &Path, dest: &Path, extensions: &[String]) -> Result<usiz
                 let into = to.join(&name);
                 stack.push((path, into));
             } else if wanted(&name, extensions) {
+                let Ok(real_path) = path.canonicalize() else {
+                    continue;
+                };
+                if !real_path.starts_with(&real_source) {
+                    continue;
+                }
+                if !crate::walk::is_markdown(&name) {
+                    let bytes = std::fs::metadata(&real_path)
+                        .map_err(io(format!("reading the size of {}", path.display())))?
+                        .len();
+                    budget.charge(bytes)?;
+                }
                 std::fs::create_dir_all(&to).map_err(io(format!("creating {}", to.display())))?;
-                copy_writable(&path, &to.join(&name))?;
+                copy_writable(&real_path, &to.join(&name))?;
                 copied = copied.saturating_add(1);
             }
         }
@@ -418,9 +577,11 @@ fn copy_bundle(source: &Path, dest: &Path, extensions: &[String]) -> Result<usiz
 }
 
 fn wanted(name: &str, extensions: &[String]) -> bool {
-    if crate::walk::is_markdown(name) {
-        return true;
-    }
+    crate::walk::is_markdown(name) || has_extension(name, extensions)
+}
+
+/// Is this file's extension on the tenant's asset allowlist?
+pub(crate) fn has_extension(name: &str, extensions: &[String]) -> bool {
     name.rsplit_once('.').is_some_and(|(_, extension)| {
         let extension = extension.to_lowercase();
         extensions.contains(&extension)
@@ -537,7 +698,7 @@ fn copy_mermaid(options: &Options) -> Result<(), AssembleError> {
 /// runs over it moments later, and fails the *next* run's overwrite, both of
 /// which look like a permissions problem rather than the design decision they
 /// actually are.
-fn copy_writable(from: &Path, to: &Path) -> Result<(), AssembleError> {
+pub(crate) fn copy_writable(from: &Path, to: &Path) -> Result<(), AssembleError> {
     use std::os::unix::fs::PermissionsExt as _;
 
     if to.exists() {

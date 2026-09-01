@@ -1,0 +1,19 @@
+# A second synthetic tenant, mounted from a subdir the way a code repository
+# is, so the referenced-files pass has something outside the subdir to reach.
+# Every value is invented; the bundle is a fixture reached with --local.
+schema_version = 1
+tenant = "fixture-subdir"
+asset_extensions = ["sh", "json"]
+
+[site]
+title = "Subdir fixture"
+base_url = "https://fixture.invalid/"
+description = "One bundle mounted from docs/, for the referenced-files pass."
+
+[[bundle]]
+id = "gamma"
+repo = "https://example.invalid/gamma.git"
+ref = "refs/heads/main"
+rev = "3333333333333333333333333333333333333333"
+subdir = "docs"
+credential = "fixture-forge"

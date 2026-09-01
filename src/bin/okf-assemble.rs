@@ -163,8 +163,19 @@ fn run() -> anyhow::Result<ExitCode> {
     let outcome = assemble::assemble(&manifest, &options)?;
     println!(
         "assembled {} bundle(s): {} file(s), {} index.md renamed to _index.md, \
-         {} file(s) had links rewritten.",
-        outcome.bundles, outcome.files, outcome.renamed, outcome.rewritten
+         {} file(s) had links rewritten, {} referenced file(s) mounted under /_files/.",
+        outcome.bundles, outcome.files, outcome.renamed, outcome.rewritten, outcome.referenced
+    );
+    let assets: u64 = outcome
+        .asset_bytes
+        .iter()
+        .fold(0u64, |sum, (_, bytes)| sum.saturating_add(*bytes));
+    // Printed on every run, zero included, so growth is a number somebody
+    // watches rather than a failure somebody meets: crossing max_asset_bytes
+    // turns this line into the error that names blob storage.
+    println!(
+        "asset payload: {assets} of {} byte(s) budgeted (max_asset_bytes).",
+        manifest.asset_budget()
     );
     if !outcome.local.is_empty() {
         println!(

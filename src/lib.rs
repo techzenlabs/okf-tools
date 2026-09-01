@@ -32,6 +32,7 @@ pub mod links;
 pub mod manifest;
 pub mod migrate;
 pub mod promote;
+pub(crate) mod refassets;
 pub mod restate;
 pub mod retype;
 pub mod scan;
