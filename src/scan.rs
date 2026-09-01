@@ -27,6 +27,12 @@ const SNIFF_BYTES: usize = 8192;
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Directories never descended into.
+///
+/// `.terraform` earned its place the way the others did: it holds provider
+/// binaries `tofu init` downloads, they are ELF files the scanner reports as
+/// uninspectable, and failing closed on them turned every local `just build`
+/// red on a machine with local infra state while CI — which has no such
+/// directory — stayed green.
 const SKIP_DIRS: &[&str] = &[
     ".git",
     ".direnv",
@@ -35,6 +41,7 @@ const SKIP_DIRS: &[&str] = &[
     "result",
     ".venv",
     "__pycache__",
+    ".terraform",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -471,5 +478,27 @@ mod tests {
         };
         assert!(clean.is_clean());
         assert!(clean.failure_reason().is_none());
+    }
+
+    /// `tofu init` fills `.terraform/` with provider ELF binaries, and a scan
+    /// that reads them fails closed on every machine with local infra state
+    /// while CI, which has no such directory, stays green.
+    #[test]
+    fn a_terraform_plugin_cache_is_never_descended_into() {
+        let root = std::env::temp_dir().join(format!("okf-scan-terraform-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let providers = root.join("infra/.terraform/providers");
+        let _ = std::fs::create_dir_all(&providers);
+        let _ = std::fs::write(
+            providers.join("provider-binary"),
+            [0x7fu8, b'E', b'L', b'F', 0],
+        );
+        let _ = std::fs::write(root.join("page.md"), "clean text\n");
+
+        let report = scan(&root, &Options::default()).unwrap_or_default();
+        assert!(report.is_clean(), "{:?}", report.failure_reason());
+        assert_eq!(report.scanned, 1);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
