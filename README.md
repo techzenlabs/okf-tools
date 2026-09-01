@@ -299,7 +299,7 @@ knowledge repositories carry byte-identical frozen copies of a script whose
 upstream fix never reached them. A forked Hugo layout would be worse, since a
 layout bug is invisible until somebody reads a page.
 
-So `okf-tools` owns the eleven layout files, the stylesheet and the `justfile`,
+So `okf-tools` owns the fourteen layout files, the stylesheet and the `justfile`,
 and `okf-assemble` writes them into the site tree on every build. A tenant
 repository tracks its `site.toml`, its deploy configuration and nothing that
 `okf-check --layouts` names.
@@ -309,6 +309,8 @@ repository tracks its `site.toml`, its deploy configuration and nothing that
 ```toml
 schema_version = 1
 tenant = "example"
+asset_extensions = ["png", "svg", "json"]         # copied beside the markdown; empty means the image defaults
+max_asset_bytes = 67108864                        # optional; the asset payload ceiling, 64 MiB unless raised
 
 [site]
 title = "Example documentation"
@@ -332,6 +334,33 @@ because a machine-local `insteadOf` rewrite has no business in a tracked file.
 `credentials.allow` beside it lists the credential names this tenant may reach
 for. A manifest naming anything else fails on the first line of the job rather
 than at fetch time.
+
+### Referenced files, and the payload ceiling
+
+A code repository mounts `docs/`, and its documents point sideways —
+`../../scripts/support-bundle.sh`, `../../schemas/inventory.schema.json`. The
+readers those links dead-end for are exactly the ones the site exists for:
+people with no licence on the source forge. So assembly resolves each escaping
+link against the fetched tree (the whole repository is already on disk;
+`subdir` only narrowed the copy) and mounts the target under
+`static/_files/<id>/`, preserving its repository-relative path. The link is
+rewritten to `/_files/<id>/<path>`, and the prefix cannot collide with a mount
+because a bundle id may not start with an underscore.
+
+What mounts is bounded three ways. The tenant's `asset_extensions` allowlist
+decides, the same knob that governs assets beside the markdown — a tenant that
+keeps its list to text types keeps every published asset scannable. Only a
+file that exists mounts; a directory link, a dead link and a link leaving the
+repository stay exactly as written, because §11 makes a broken link a link.
+And every byte is charged against `max_asset_bytes` *before* it is copied:
+assets ship inside the site image, and the run that would cross the ceiling
+fails, naming each bundle's spend, which is the signal to either raise the key
+deliberately or move the bulk files to blob storage. A successful run prints
+the payload beside the budget so the growth is a number somebody watches.
+
+In rendered pages, an internal link whose target carries a file extension gets
+the `download` attribute from the shared `render-link` hook, so clicking a
+mounted script or schema saves the file instead of navigating to raw bytes.
 
 ### A tenant's own brand
 

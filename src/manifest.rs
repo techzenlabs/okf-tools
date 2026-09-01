@@ -30,6 +30,17 @@ pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_ASSET_EXTENSIONS: &[&str] =
     &["png", "jpg", "jpeg", "gif", "svg", "webp", "avif", "ico"];
 
+/// What a tenant's asset payload may reach before the build refuses: 64 MiB.
+///
+/// Every copied asset ships inside the site image, so the ceiling is about
+/// keeping image size a reviewed number rather than a drifting one. The
+/// tenant that asked for the ceiling carries ~2.3 MB of referenced files, so
+/// the default leaves room for years of ordinary growth while still going red
+/// well before an image becomes operationally annoying. Crossing it is the
+/// documented signal to either raise `max_asset_bytes` deliberately or move
+/// the bulk files to blob storage.
+pub const DEFAULT_MAX_ASSET_BYTES: u64 = 64 * 1024 * 1024;
+
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestError {
     #[error("{path}: {source}")]
@@ -205,6 +216,11 @@ pub struct Manifest {
     pub site: SiteSettings,
     /// Extensions copied beside the markdown. Empty means the default list.
     pub asset_extensions: Vec<String>,
+    /// The asset payload ceiling in bytes; absent means
+    /// [`DEFAULT_MAX_ASSET_BYTES`]. The build fails the moment the copied
+    /// assets pass it, which is the tenant's signal to raise it deliberately
+    /// or move bulk files to blob storage.
+    pub max_asset_bytes: Option<u64>,
     #[serde(rename = "bundle")]
     pub bundles: Vec<Bundle>,
 }
@@ -216,6 +232,7 @@ impl Default for Manifest {
             tenant: String::new(),
             site: SiteSettings::default(),
             asset_extensions: Vec::new(),
+            max_asset_bytes: None,
             bundles: Vec::new(),
         }
     }
@@ -386,6 +403,12 @@ impl Manifest {
             .iter()
             .map(|e| e.trim_start_matches('.').to_lowercase())
             .collect()
+    }
+
+    /// The asset payload ceiling this tenant builds under.
+    #[must_use]
+    pub fn asset_budget(&self) -> u64 {
+        self.max_asset_bytes.unwrap_or(DEFAULT_MAX_ASSET_BYTES)
     }
 }
 

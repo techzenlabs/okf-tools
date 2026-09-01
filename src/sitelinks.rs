@@ -32,6 +32,11 @@ use crate::assemble::AssembleError;
 
 /// Rewrite every markdown file under one mount. Returns the number changed.
 ///
+/// `mounted` names the mounted-references tree for this bundle — its subdir in
+/// the source repository, and where [`crate::refassets`] copied the escaping
+/// targets — or `None` for a bundle mounted at its repository root, which has
+/// nothing outside itself.
+///
 /// # Errors
 ///
 /// Fails when a file under `mount` cannot be read or written.
@@ -39,6 +44,7 @@ pub fn rewrite_tree(
     mount: &Path,
     id: &str,
     site_absolute_base: &str,
+    mounted: Option<(&str, &Path)>,
 ) -> Result<usize, AssembleError> {
     let mut changed = 0usize;
     let mut stack = vec![mount.to_path_buf()];
@@ -68,7 +74,11 @@ pub fn rewrite_tree(
             source,
         })?;
         let dir = file.parent().unwrap_or(mount);
-        let rewritten = rewrite_text(&text, &Context::new(mount, dir, id, site_absolute_base));
+        let mut context = Context::new(mount, dir, id, site_absolute_base);
+        if let Some((subdir, files_dir)) = mounted {
+            context = context.with_files(subdir, files_dir);
+        }
+        let rewritten = rewrite_text(&text, &context);
         if rewritten != text {
             std::fs::write(file, rewritten).map_err(|source| AssembleError::Io {
                 context: format!("writing {}", file.display()),
@@ -90,6 +100,16 @@ pub struct Context {
     mount_dir: PathBuf,
     /// Upstream base for a mirrored mount, or empty.
     site_absolute_base: String,
+    /// The mounted-references tree, for links that leave the subdir.
+    files: Option<FilesMount>,
+}
+
+/// Where this bundle's out-of-subdir references were mounted.
+struct FilesMount {
+    /// The bundle's subdir in its source repository, split into segments.
+    subdir: Vec<String>,
+    /// The copied tree on disk, `static/_files/<id>`, for existence tests.
+    dir: PathBuf,
 }
 
 impl Context {
@@ -113,8 +133,49 @@ impl Context {
             mount_path,
             mount_dir: mount.to_path_buf(),
             site_absolute_base: site_absolute_base.trim_end_matches('/').to_owned(),
+            files: None,
         }
     }
+
+    /// Name the mounted-references tree, enabling the `/_files/` rewrite.
+    #[must_use]
+    pub fn with_files(mut self, subdir: &str, dir: &Path) -> Self {
+        self.files = Some(FilesMount {
+            subdir: subdir
+                .split('/')
+                .filter(|part| !part.is_empty() && *part != ".")
+                .map(str::to_owned)
+                .collect(),
+            dir: dir.to_path_buf(),
+        });
+        self
+    }
+}
+
+/// The path component of every inline link target in one document, with any
+/// fragment and any title stripped — the same walk [`rewrite_text`] makes,
+/// shared so [`crate::refassets`] cannot disagree with it about what a link
+/// is.
+pub(crate) fn link_paths(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("](") {
+        let (_, tail) = rest.split_at(at.saturating_add(2));
+        let Some(close) = find_target_end(tail) else {
+            rest = tail;
+            continue;
+        };
+        let (target, after) = tail.split_at(close);
+        let url = target
+            .split_once(char::is_whitespace)
+            .map_or(target, |(url, _)| url);
+        let path = url.split_once('#').map_or(url, |(path, _)| path);
+        if !path.is_empty() {
+            out.push(path);
+        }
+        rest = after;
+    }
+    out
 }
 
 /// Rewrite every markdown link target in one document.
@@ -190,7 +251,41 @@ fn rewrite_path(path: &str, context: &Context) -> String {
         .split('/')
         .filter(|segment| !segment.is_empty())
         .collect();
-    resolve(here, path, context).unwrap_or_else(|| path.to_owned())
+    resolve(here, path, context)
+        .or_else(|| resolve_files(path, context))
+        .unwrap_or_else(|| path.to_owned())
+}
+
+/// Render a link that left its subdir as the `/_files/` path it was mounted
+/// at — and only when the file is really there.
+///
+/// The arithmetic is [`crate::refassets::escaped_target`], the same call the
+/// mounting pass made, so the two cannot drift; the existence test is against
+/// the tree that pass copied, so anything it declined — a dead link, a
+/// directory, an extension the tenant did not allowlist — stays exactly as
+/// written. No segment is sanitised: `static/` is byte-copied, and the URL is
+/// the path.
+fn resolve_files(path: &str, context: &Context) -> Option<String> {
+    let files = context.files.as_ref()?;
+    let doc_dir: Vec<String> = context
+        .here
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .skip(1)
+        .map(str::to_owned)
+        .collect();
+    let segments = crate::refassets::escaped_target(&files.subdir, &doc_dir, path)?;
+    let name = segments.last()?;
+    if crate::walk::is_markdown(name) {
+        return None;
+    }
+    let on_disk = files.dir.join(segments.iter().collect::<PathBuf>());
+    if !on_disk.is_file() {
+        return None;
+    }
+    let mount_id = context.mount_path.trim_start_matches('/');
+    Some(format!("/_files/{mount_id}/{}", segments.join("/")))
 }
 
 /// Resolve `path` against `base` and render it as a site path.
