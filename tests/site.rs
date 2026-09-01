@@ -517,6 +517,57 @@ fn a_second_assembly_rebuilds_the_mounted_references_from_empty() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A symlink out of the bundle tree is refused, not followed.
+///
+/// A copy would follow it, publishing whatever it points at and charging the
+/// budget from symlink-target metadata that a special file is free to lie
+/// about. The fixture is built at runtime: a copy of gamma whose docs gain a
+/// `leak.json` pointing above the bundle root at a file the allowlist would
+/// otherwise take.
+#[test]
+fn a_symlink_escaping_the_bundle_is_not_copied() {
+    let staging = scratch("symlink-staging");
+    let bundle = staging.join("gamma");
+    copy_dir(&fixture("site/gamma"), &bundle);
+    let _ = std::fs::write(staging.join("outside-secret.json"), "{\"leak\": true}");
+    #[cfg(unix)]
+    let _ = std::os::unix::fs::symlink(
+        staging.join("outside-secret.json"),
+        bundle.join("docs/leak.json"),
+    );
+
+    let root = scratch("symlink");
+    let mut manifest = Manifest::load(&fixture("site/tenant-subdir/site.toml")).unwrap_or_default();
+    manifest.max_asset_bytes = None;
+    let mut locals = BTreeMap::new();
+    locals.insert("gamma".to_owned(), bundle);
+    let mut options = Options::new(root.clone());
+    options.locals = locals;
+    options.mermaid = Some(fixture("site/tenant-subdir/site.toml"));
+    let outcome = assemble::assemble(&manifest, &options).unwrap_or_default();
+
+    assert!(outcome.files > 0);
+    assert!(!root.join("content/gamma/leak.json").exists());
+    // The in-tree assets still copied and were the only bytes charged.
+    assert!(root.join("content/gamma/data.json").is_file());
+
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&staging);
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    let _ = std::fs::create_dir_all(to);
+    for entry in std::fs::read_dir(from).into_iter().flatten().flatten() {
+        let source = entry.path();
+        let target = to.join(entry.file_name());
+        if source.is_dir() {
+            copy_dir(&source, &target);
+        } else {
+            let _ = std::fs::copy(&source, &target);
+        }
+    }
+}
+
 /// A pin bump changes the rev and not one other byte.
 ///
 /// The defect this gates: `--update` wrote the manifest back through the TOML

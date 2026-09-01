@@ -500,6 +500,13 @@ fn fetch(bundle: &Bundle, work: &Path) -> Result<(), AssembleError> {
 /// An allowlist rather than a filter, because a bundle holds more than its
 /// documents: mail archives, tokens, signed agreements, build output. What
 /// reaches the site is what somebody named.
+///
+/// A symlink that resolves outside the source tree is refused, the same
+/// stance `okf-serve` and the referenced-files pass take. A copy would follow
+/// it, publishing whatever it points at — and charging the budget from
+/// symlink-target metadata that a special file is free to lie about. Inside
+/// the tree, a git checkout holds only regular files, whose size is the
+/// truth the charge needs.
 fn copy_bundle(
     source: &Path,
     dest: &Path,
@@ -507,6 +514,9 @@ fn copy_bundle(
     budget: &mut Budget,
 ) -> Result<usize, AssembleError> {
     std::fs::create_dir_all(dest).map_err(io(format!("creating {}", dest.display())))?;
+    let real_source = source
+        .canonicalize()
+        .map_err(io(format!("resolving {}", source.display())))?;
     let mut copied = 0usize;
     let mut stack = vec![(source.to_path_buf(), dest.to_path_buf())];
     while let Some((from, to)) = stack.pop() {
@@ -524,14 +534,20 @@ fn copy_bundle(
                 let into = to.join(&name);
                 stack.push((path, into));
             } else if wanted(&name, extensions) {
+                let Ok(real_path) = path.canonicalize() else {
+                    continue;
+                };
+                if !real_path.starts_with(&real_source) {
+                    continue;
+                }
                 if !crate::walk::is_markdown(&name) {
-                    let bytes = std::fs::metadata(&path)
+                    let bytes = std::fs::metadata(&real_path)
                         .map_err(io(format!("reading the size of {}", path.display())))?
                         .len();
                     budget.charge(bytes)?;
                 }
                 std::fs::create_dir_all(&to).map_err(io(format!("creating {}", to.display())))?;
-                copy_writable(&path, &to.join(&name))?;
+                copy_writable(&real_path, &to.join(&name))?;
                 copied = copied.saturating_add(1);
             }
         }

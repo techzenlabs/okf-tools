@@ -2,13 +2,14 @@
 
 Whether a target is a file is read from the href assembly wrote, not
 guessed from context: internal (leading slash), and its last segment
-carries an extension. Page links end in a slash by construction, so they
-never match; a fragment link has no leading slash; an external link keeps
-the browser's own behaviour, since `download` is ignored cross-origin
-anyway. This covers both surfaces one rewrite produces: an asset beside
-its page (`/x/status/programs.json`) and a mounted reference from outside
-the subdir (`/_files/x/scripts/support.sh`).
+carries an extension, with a trailing fragment or query tolerated since
+the rewrite preserves an author's `#usage`. Page links end in a slash by
+construction, so they never match; a bare fragment has no leading slash;
+an external link keeps the browser's own behaviour, since `download` is
+ignored cross-origin anyway. This covers both surfaces one rewrite
+produces: an asset beside its page (`/x/status/programs.json`) and a
+mounted reference from outside the subdir (`/_files/x/scripts/support.sh`).
 */ -}}
-<a href="{{ .Destination | safeURL }}"{{ with .Title }} title="{{ . }}"{{ end }}{{ if and (strings.HasPrefix .Destination "/") (findRE `\.[A-Za-z0-9]+$` .Destination) }} download{{ end }}>{{ .Text | safeHTML }}</a>
+<a href="{{ .Destination | safeURL }}"{{ with .Title }} title="{{ . }}"{{ end }}{{ if and (strings.HasPrefix .Destination "/") (findRE `\.[A-Za-z0-9]+([#?][^/]*)?$` .Destination) }} download{{ end }}>{{ .Text | safeHTML }}</a>
 {{- /* The hook renders inline; the trim above keeps the file's final
 newline out of every paragraph a link sits in. */ -}}

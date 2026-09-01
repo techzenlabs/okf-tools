@@ -170,15 +170,13 @@ fn run() -> anyhow::Result<ExitCode> {
         .asset_bytes
         .iter()
         .fold(0u64, |sum, (_, bytes)| sum.saturating_add(*bytes));
-    if assets > 0 {
-        // Printed on every run so growth is a number somebody watches, not a
-        // failure somebody meets: crossing max_asset_bytes turns this line
-        // into the error that names blob storage.
-        println!(
-            "asset payload: {assets} of {} byte(s) budgeted (max_asset_bytes).",
-            manifest.asset_budget()
-        );
-    }
+    // Printed on every run, zero included, so growth is a number somebody
+    // watches rather than a failure somebody meets: crossing max_asset_bytes
+    // turns this line into the error that names blob storage.
+    println!(
+        "asset payload: {assets} of {} byte(s) budgeted (max_asset_bytes).",
+        manifest.asset_budget()
+    );
     if !outcome.local.is_empty() {
         println!(
             "local build: {} — the manifest was not modified.",

@@ -29,10 +29,10 @@ const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 /// Directories never descended into.
 ///
 /// `.terraform` earned its place the way the others did: it holds provider
-/// binaries `tofu init` downloads, they are ELF files the scanner reports as
-/// uninspectable, and failing closed on them turned every local `just build`
-/// red on a machine with local infra state while CI — which has no such
-/// directory — stayed green.
+/// binaries `tofu init` downloads, they are larger than [`MAX_FILE_BYTES`]
+/// and therefore unscannable, and failing closed on them turned every local
+/// `just build` red on a machine with local infra state while CI — which has
+/// no such directory — stayed green.
 const SKIP_DIRS: &[&str] = &[
     ".git",
     ".direnv",
@@ -489,11 +489,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let providers = root.join("infra/.terraform/providers");
         let _ = std::fs::create_dir_all(&providers);
-        let _ = std::fs::write(
-            providers.join("provider-binary"),
-            [0x7fu8, b'E', b'L', b'F', 0],
-        );
+        // Sparse and one byte past MAX_FILE_BYTES, because that is the
+        // mechanism that failed the real build: an oversized file is
+        // unscannable, and unscannable fails closed. A small binary would
+        // only be counted as skipped, and this test would pass with the
+        // skip entry deleted.
+        if let Ok(file) = std::fs::File::create(providers.join("provider-binary")) {
+            let _ = file.set_len(MAX_FILE_BYTES.saturating_add(1));
+        }
         let _ = std::fs::write(root.join("page.md"), "clean text\n");
+
+        // The negative control first: the same file outside a skipped
+        // directory fails the run, which is what says the skip below is
+        // load-bearing rather than incidental.
+        if let Ok(file) = std::fs::File::create(root.join("stray-binary")) {
+            let _ = file.set_len(MAX_FILE_BYTES.saturating_add(1));
+        }
+        let failing = scan(&root, &Options::default()).unwrap_or_default();
+        assert!(
+            !failing.is_clean(),
+            "an oversized file outside .terraform must fail the run"
+        );
+        let _ = std::fs::remove_file(root.join("stray-binary"));
 
         let report = scan(&root, &Options::default()).unwrap_or_default();
         assert!(report.is_clean(), "{:?}", report.failure_reason());
