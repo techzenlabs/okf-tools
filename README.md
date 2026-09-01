@@ -379,7 +379,7 @@ The stylesheet is how a tenant restyles without the fork `okf-check
 --layouts` refuses: it loads after the shared stylesheet, so redefining the
 custom properties (`--okf-bg`, `--okf-link`, …) and the Chroma token classes
 at equal specificity wins every cascade tie on source order. A tenant that
-overrides the theme defaults owns the whole claim that comes with them —
+overrides the theme defaults owns the whole claim that comes with them:
 both color schemes, and the contrast of every pair it redefines.
 
 There is no manifest key for these on purpose. A path a tenant writes down is a
