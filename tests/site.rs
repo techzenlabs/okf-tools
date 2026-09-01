@@ -555,6 +555,39 @@ fn a_symlink_escaping_the_bundle_is_not_copied() {
     let _ = std::fs::remove_dir_all(&staging);
 }
 
+/// A subdir that is itself a symlink out of the repository is refused, not
+/// followed — every per-file containment check downstream measures against
+/// the resolved directory and would miss the escape entirely.
+#[test]
+fn a_subdir_that_resolves_outside_the_tree_refuses_the_assembly() {
+    let staging = scratch("subdir-escape-staging");
+    let bundle = staging.join("gamma");
+    let _ = std::fs::create_dir_all(&bundle);
+    let outside = staging.join("elsewhere");
+    let _ = std::fs::create_dir_all(&outside);
+    let _ = std::fs::write(outside.join("planted.md"), "# Planted\n");
+    #[cfg(unix)]
+    let _ = std::os::unix::fs::symlink(&outside, bundle.join("docs"));
+
+    let root = scratch("subdir-escape");
+    let manifest = Manifest::load(&fixture("site/tenant-subdir/site.toml")).unwrap_or_default();
+    let mut locals = BTreeMap::new();
+    locals.insert("gamma".to_owned(), bundle);
+    let mut options = Options::new(root.clone());
+    options.locals = locals;
+    options.mermaid = Some(fixture("site/tenant-subdir/site.toml"));
+    let err = assemble::assemble(&manifest, &options)
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+
+    assert!(err.contains("resolves outside the fetched tree"), "{err}");
+    assert!(!root.join("content/gamma/planted.md").exists());
+
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&staging);
+}
+
 fn copy_dir(from: &Path, to: &Path) {
     let _ = std::fs::create_dir_all(to);
     for entry in std::fs::read_dir(from).into_iter().flatten().flatten() {

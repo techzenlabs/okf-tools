@@ -75,6 +75,12 @@ pub enum AssembleError {
         rev: String,
     },
     #[error(
+        "bundle `{id}`: subdir `{subdir}` resolves outside the fetched tree. \
+         A subdir that is a symlink out of its own repository would publish \
+         whatever it points at, so it is refused rather than followed"
+    )]
+    SubdirEscapes { id: String, subdir: String },
+    #[error(
         "mermaid.min.js was not found. Set OKF_MERMAID_JS or pass --mermaid \
          <path>; the nix package wires it to nixpkgs#mermaid-cli, and it is \
          copied rather than executed"
@@ -435,6 +441,21 @@ fn subdir_of(bundle: &Bundle, tree: &Path) -> Result<Source, AssembleError> {
             id: bundle.id.clone(),
             subdir: bundle.subdir.clone(),
             rev: bundle.rev.clone(),
+        });
+    }
+    // The subdir itself could be a symlink out of the repository, and every
+    // per-file containment check downstream would then measure against the
+    // escape rather than catch it.
+    let (Ok(real_tree), Ok(real_docs)) = (tree.canonicalize(), docs.canonicalize()) else {
+        return Err(AssembleError::SubdirEscapes {
+            id: bundle.id.clone(),
+            subdir: bundle.subdir.clone(),
+        });
+    };
+    if !real_docs.starts_with(&real_tree) {
+        return Err(AssembleError::SubdirEscapes {
+            id: bundle.id.clone(),
+            subdir: bundle.subdir.clone(),
         });
     }
     Ok(Source {
