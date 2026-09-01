@@ -22,6 +22,12 @@ mkdir -p static
 touch static/favicon.ico static/favicon-32x32.png static/favicon-192x192.png \
   static/apple-touch-icon.png
 
+# The tenant's own stylesheet, same convention. A real one redefines the
+# custom properties; an empty one exercises the same branch, because what is
+# under test is the link and its position, not the styling.
+mkdir -p static/css
+touch static/css/tenant-brand.css
+
 fail() {
   echo "FAIL: $*" >&2
   exit 1
@@ -127,3 +133,19 @@ grep -q 'class="okf-mark"[^>]*alt=""' public/index.html ||
 for icon in favicon.ico favicon-32x32.png favicon-192x192.png apple-touch-icon.png; do
   test -f "public/$icon" || fail "the tenant's $icon was not published"
 done
+
+# 9. The tenant stylesheet, same convention as the icons and one property
+#    more: it must load *after* okf.css, because a tenant restyles by
+#    redefining tokens at equal specificity and the cascade breaks ties on
+#    source order. A link rendered before okf.css is a build that looks
+#    green and a brand that silently loses every tie.
+for page in public/index.html public/alpha/runbooks/relay-restart/index.html; do
+  grep -q 'href="/css/tenant-brand.css"' "$page" ||
+    fail "$page links no tenant-brand.css for a tenant that ships one"
+  okf_line=$(grep -n 'href="/css/okf.css"' "$page" | head -1 | cut -d: -f1)
+  brand_line=$(grep -n 'href="/css/tenant-brand.css"' "$page" | head -1 | cut -d: -f1)
+  test "$okf_line" -lt "$brand_line" ||
+    fail "$page loads tenant-brand.css before okf.css, so the tenant loses every cascade tie"
+done
+test -f public/css/tenant-brand.css ||
+  fail "the tenant's stylesheet was not published"

@@ -364,7 +364,7 @@ mounted script or schema saves the file instead of navigating to raw bytes.
 
 ### A tenant's own brand
 
-A tenant that drops any of four names into its own `static/` gets them linked
+A tenant that drops any of five names into its own `static/` gets them linked
 from every page, and one that drops none emits no link at all:
 
 | File | What it becomes |
@@ -373,6 +373,14 @@ from every page, and one that drops none emits no link at all:
 | `favicon-32x32.png` | the tab icon a browser prefers when it can pick |
 | `favicon-192x192.png` | the bookmark icon, and the mark in the header link |
 | `apple-touch-icon.png` | the home-screen icon on iOS |
+| `css/tenant-brand.css` | the tenant's stylesheet, linked after `css/okf.css` |
+
+The stylesheet is how a tenant restyles without the fork `okf-check
+--layouts` refuses: it loads after the shared stylesheet, so redefining the
+custom properties (`--okf-bg`, `--okf-link`, …) and the Chroma token classes
+at equal specificity wins every cascade tie on source order. A tenant that
+overrides the theme defaults owns the whole claim that comes with them —
+both color schemes, and the contrast of every pair it redefines.
 
 There is no manifest key for these on purpose. A path a tenant writes down is a
 path a tenant can mistype, and a mistyped icon is not a build failure — it is a
