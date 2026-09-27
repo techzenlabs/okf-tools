@@ -39,6 +39,9 @@
           nativeBuildInputs = [pkgs.gitMinimal];
           # The parity fixtures are the whole point of the port; run them.
           doCheck = true;
+          # tests/serve.rs binds 127.0.0.1, which the darwin sandbox refuses
+          # with EPERM unless the derivation asks for local networking.
+          __darwinAllowLocalNetworking = true;
           meta = {
             description = "OKF v0.2 conformance checker, index generator and staleness report";
             mainProgram = "okf-check";
