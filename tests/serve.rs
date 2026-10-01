@@ -160,24 +160,57 @@ fn start(label: &str, extra: &[&str]) -> Serving {
         .unwrap();
 
     let mut serving = Serving { child, port, root };
-    // Wait for the listener rather than sleeping a guess.
-    for _ in 0..200 {
+    // Wait for the listener rather than sleeping a guess. The budget is a
+    // ceiling, not an expectation: a workstation answers in milliseconds, and
+    // the 5 s this used to allow ran out on a CI runner with a sibling job
+    // beside it (#49). That failure took the package build, and every
+    // consumer's dev shell, down with it.
+    let began = std::time::Instant::now();
+    while began.elapsed() < START_BUDGET {
         if child_is_ready(&mut serving.child, port, &readiness_body, identity_header) {
             return serving;
         }
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
-    panic!("okf-serve did not start listening on {port}");
+    panic!(
+        "okf-serve did not start listening on {port} within {:.1?}",
+        began.elapsed()
+    );
+}
+
+const START_BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// A child that is alive and serves nothing, killed when the test drops it.
+struct Idle(Child);
+
+impl Drop for Idle {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }
 
 #[test]
 fn a_transient_listener_is_not_child_readiness() {
-    let mut serving = start("readiness", &[]);
+    // What is under test is the probe's refusal of a port that is bound but
+    // not served by the child. Any running child proves that, and one that
+    // is not `okf-serve` keeps the server's startup time out of the test
+    // (#49).
+    let mut idle = Idle(
+        Command::new("sh")
+            .args(["-c", "read _"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let transient_port = listener.local_addr().unwrap().port();
 
+    assert!(matches!(idle.0.try_wait(), Ok(None)));
     assert!(!child_is_ready(
-        &mut serving.child,
+        &mut idle.0,
         transient_port,
         "okf-serve-ready:readiness",
         None,
