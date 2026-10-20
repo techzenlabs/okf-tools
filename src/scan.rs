@@ -368,7 +368,10 @@ mod tests {
     #[test]
     fn a_certificate_is_not_a_private_key() {
         let certificate = concat!("-----BEGIN ", "CERTIFICATE", "-----");
-        assert!(findings(certificate, &Options::default()).is_empty());
+        assert_eq!(
+            findings(certificate, &Options::default()),
+            Vec::<&str>::new()
+        );
     }
 
     #[test]
@@ -376,7 +379,7 @@ mod tests {
         let default = Options::default();
         assert!(findings(ID_FORMATTED, &default).contains(&"national-identifier-formatted"));
         assert!(findings(ID_LABELLED, &default).contains(&"national-identifier-labelled"));
-        assert!(findings(ID_BARE, &default).is_empty());
+        assert_eq!(findings(ID_BARE, &default), Vec::<&str>::new());
 
         let aggressive = Options {
             bare_nine_digit: true,
@@ -390,7 +393,7 @@ mod tests {
     /// a 359-document bundle from mounting.
     #[test]
     fn svg_path_data_is_not_a_national_identifier() {
-        assert!(findings(SVG_PATH, &Options::default()).is_empty());
+        assert_eq!(findings(SVG_PATH, &Options::default()), Vec::<&str>::new());
     }
 
     /// And the narrowing did not cost the shapes it is meant to catch: each
@@ -422,7 +425,7 @@ mod tests {
     #[test]
     fn prose_about_sops_is_not_a_finding() {
         let prose = "Secrets are encrypted with SOPS and age; see modules/secrets.nix.";
-        assert!(findings(prose, &Options::default()).is_empty());
+        assert_eq!(findings(prose, &Options::default()), Vec::<&str>::new());
     }
 
     /// The reason the bare pattern is opt-in, asserted rather than argued: a
@@ -434,7 +437,7 @@ mod tests {
             bare_nine_digit: true,
             ..Options::default()
         };
-        assert!(findings(HASH_LINE, &aggressive).is_empty());
+        assert_eq!(findings(HASH_LINE, &aggressive), Vec::<&str>::new());
     }
 
     /// The token shapes, with values chosen so no forge's own push protection

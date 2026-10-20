@@ -228,7 +228,7 @@ mod tests {
                 "notes/kept.md",
             ],
         );
-        assert!(find(&root, &[]).is_empty());
+        assert_eq!(find(&root, &[]), Vec::<Collision>::new());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -244,7 +244,7 @@ mod tests {
     #[test]
     fn a_skipped_directory_is_outside_the_scan() {
         let root = tree("skipped", &["result/plans/index.md", "result/plans.md"]);
-        assert!(find(&root, &["result".to_owned()]).is_empty());
+        assert_eq!(find(&root, &["result".to_owned()]), Vec::<Collision>::new());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

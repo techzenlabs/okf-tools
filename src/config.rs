@@ -776,7 +776,7 @@ mod tests {
         assert!(!conf.closed_vocabulary);
         assert!(!conf.links_stay_in_bundle);
         assert!(!conf.owner_record);
-        assert!(conf.site_urls.is_empty());
+        assert_eq!(conf.site_urls, Vec::<String>::new());
     }
 
     #[test]

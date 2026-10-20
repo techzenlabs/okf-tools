@@ -183,7 +183,7 @@ fn a_pinned_source_at_the_manifest_rev_is_verified_and_not_stamped() {
     options.mermaid = Some(fixture("site/tenant/site.toml"));
     let outcome = assemble::assemble(&manifest, &options).unwrap_or_default();
     assert_eq!(outcome.pinned, ["alpha", "beta"]);
-    assert!(outcome.local.is_empty());
+    assert_eq!(outcome.local, Vec::<String>::new());
     // The stamp lives in the generated hugo.toml, and a verified pin must
     // not carry it: the footer span and the pagefind index both follow from
     // this one key.
@@ -392,7 +392,7 @@ fn only_markdown_and_allowlisted_assets_reach_the_content_tree() {
             }
         }
     }
-    assert!(!found.is_empty());
+    assert_ne!(found, Vec::<String>::new());
     assert!(
         found.iter().all(|name| okf_tools::walk::is_markdown(name)),
         "the fixture bundles hold only markdown, and only markdown arrived: {found:?}"
