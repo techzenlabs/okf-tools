@@ -335,7 +335,7 @@ mod tests {
     #[test]
     fn every_pattern_compiles() {
         for pattern in [&*FENCE, &*BULLET, &*IDENTIFIER, &*DATE, &*OCCASION] {
-            assert!(!pattern.as_str().is_empty());
+            assert_ne!(pattern.as_str(), "");
         }
     }
 
@@ -381,14 +381,14 @@ mod tests {
     #[test]
     fn a_reworded_restatement_carrying_the_same_labels_passes() {
         let draft = "---\ntype: \"System\"\n---\n\nFrames are dropped by the relay under load (Confirmed, 2026-03-04).\n";
-        assert!(manufactured_labels(draft, SOURCE).is_empty());
+        assert_eq!(manufactured_labels(draft, SOURCE), Vec::<Finding>::new());
     }
 
     /// Removing a label is not a finding. Promotion may say less.
     #[test]
     fn dropping_a_label_is_not_a_finding() {
         let draft = "---\ntype: \"System\"\n---\n\nFrames are dropped by the relay under load.\n";
-        assert!(manufactured_labels(draft, SOURCE).is_empty());
+        assert_eq!(manufactured_labels(draft, SOURCE), Vec::<Finding>::new());
     }
 
     #[test]
@@ -407,7 +407,7 @@ mod tests {
     fn the_owner_record_is_not_a_person_bullet() {
         let profiled = vec!["Dana Quill".to_owned()];
         let draft = "---\nowner:\n  - name: \"Dana Quill\"\n    title: \"Platform lead\"\n---\n\nThe relay drops frames.\n";
-        assert!(person_bullets(draft, &profiled).is_empty());
+        assert_eq!(person_bullets(draft, &profiled), Vec::<Finding>::new());
     }
 
     #[test]
@@ -425,13 +425,19 @@ mod tests {
     fn an_identifier_the_destination_holds_is_reachable() {
         let draft = "---\ntype: \"System\"\n---\n\nSee DEC-066.\n";
         let glossary = "DEC-066 — the decision to run one relay per site.";
-        assert!(unresolvable_identifiers(draft, glossary, &[]).is_empty());
+        assert_eq!(
+            unresolvable_identifiers(draft, glossary, &[]),
+            Vec::<Finding>::new()
+        );
     }
 
     #[test]
     fn a_configured_prefix_is_exempt_case_insensitively() {
         let draft = "---\ntype: \"System\"\n---\n\nTracked as JIRA-4102.\n";
-        assert!(unresolvable_identifiers(draft, "", &["jira".to_owned()]).is_empty());
+        assert_eq!(
+            unresolvable_identifiers(draft, "", &["jira".to_owned()]),
+            Vec::<Finding>::new()
+        );
     }
 
     #[test]
@@ -449,7 +455,7 @@ mod tests {
     #[test]
     fn a_bare_year_is_not_a_date() {
         let draft = "---\ntype: \"System\"\n---\n\nThe 2024 excess was discussed at length in the register.\n";
-        assert!(reconstructed_meetings(draft).is_empty());
+        assert_eq!(reconstructed_meetings(draft), Vec::<Finding>::new());
     }
 
     /// A quoted log line is a machine's output, not a restatement.
@@ -457,7 +463,10 @@ mod tests {
     fn fenced_code_is_not_prose() {
         let draft =
             "---\ntype: \"System\"\n---\n\n```\n2026-07-31 joint call scheduled\nDEC-066\n```\n";
-        assert!(reconstructed_meetings(draft).is_empty());
-        assert!(unresolvable_identifiers(draft, "", &[]).is_empty());
+        assert_eq!(reconstructed_meetings(draft), Vec::<Finding>::new());
+        assert_eq!(
+            unresolvable_identifiers(draft, "", &[]),
+            Vec::<Finding>::new()
+        );
     }
 }

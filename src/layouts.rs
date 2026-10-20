@@ -193,7 +193,7 @@ mod tests {
             "layouts/lane-cast/single.html",
             "hugo.toml",
         ];
-        assert!(forked(tracked).is_empty());
+        assert_eq!(forked(tracked), Vec::<String>::new());
 
         let replaced = ["layouts/_default/baseof.html", "site.toml"];
         assert_eq!(forked(replaced), ["layouts/_default/baseof.html"]);
@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn a_tracked_shared_file_is_the_other_gate_s_business() {
         let all: Vec<&str> = owned_paths();
-        assert!(unignored(all, []).is_empty());
+        assert_eq!(unignored(all, []), Vec::<String>::new());
     }
 
     /// A tenant overlay is not owned, so it is neither gate's business
@@ -224,6 +224,9 @@ mod tests {
     #[test]
     fn an_overlay_is_not_owned_and_is_not_reported() {
         let ignored: Vec<&str> = owned_paths();
-        assert!(unignored(["layouts/partials/brand.html"], ignored).is_empty());
+        assert_eq!(
+            unignored(["layouts/partials/brand.html"], ignored),
+            Vec::<String>::new()
+        );
     }
 }

@@ -194,7 +194,7 @@ fn survey_uses_remote_refs_and_classifies_only_branch_only_findings() {
         "origin/topic:\n  generated\tgenerated/report.md\n  untypable\torphan.md\n  would fail\ttyped/bad-link.md\n  would fail\ttyped/bad-owner.md\n  would fail\ttyped/bad-url.md\n  generated\ttyped/frontmatter.md\n  generated\ttyped/marker.md\n  would fail\ttyped/plain.md\n"
     );
     assert_eq!(git(root.path(), &["branch", "--show-current"]), "main");
-    assert!(git(root.path(), &["status", "--porcelain"]).is_empty());
+    assert_eq!(git(root.path(), &["status", "--porcelain"]), "");
 }
 
 #[test]
@@ -238,8 +238,8 @@ fn a_repository_with_no_branch_findings_prints_nothing() {
     let output = run(root.path(), &["--survey-branches"]);
 
     assert!(output.status.success());
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
 }
 
 #[test]

@@ -653,7 +653,7 @@ mod tests {
     #[test]
     fn a_scalar_key_has_no_records() {
         let text = "---\nowner: someone\n---\n";
-        assert!(nested_records(text, "owner").is_empty());
+        assert_eq!(nested_records(text, "owner"), Vec::<Record>::new());
     }
 
     #[test]

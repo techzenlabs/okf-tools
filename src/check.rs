@@ -1050,7 +1050,7 @@ mod tests {
         assert!(report.errors[0].contains("§11.2"));
 
         let report = concept("---\ntype: Nope\ntitle: T\ndescription: D\n---\nbody\n");
-        assert!(report.errors.is_empty());
+        assert_eq!(report.errors, Vec::<String>::new());
         assert_eq!(
             report.warnings,
             ["p.md: type `Nope` is not in the bundle vocabulary"]
@@ -1092,7 +1092,7 @@ mod tests {
             false,
             None,
         );
-        assert!(report.errors.is_empty());
+        assert_eq!(report.errors, Vec::<String>::new());
         assert!(report.warnings.iter().any(|w| w.contains("§10.2")));
     }
 
@@ -1107,7 +1107,7 @@ mod tests {
             false,
             None,
         );
-        assert!(report.warnings.is_empty());
+        assert_eq!(report.warnings, Vec::<String>::new());
     }
 
     #[test]
@@ -1154,7 +1154,7 @@ mod tests {
             "---\nowner:\n  - title: \"T\"\n---\nb\n",
         );
         assert!(report.errors.iter().any(|e| e.contains("has no `name`")));
-        assert!(report.warnings.is_empty());
+        assert_eq!(report.warnings, Vec::<String>::new());
 
         let mut report = Report::default();
         check_owner(
@@ -1186,8 +1186,8 @@ mod tests {
     fn a_page_with_no_owner_key_reports_nothing() {
         let mut report = Report::default();
         check_owner(&mut report, "p.md", "---\ntype: System\n---\nb\n");
-        assert!(report.errors.is_empty());
-        assert!(report.warnings.is_empty());
+        assert_eq!(report.errors, Vec::<String>::new());
+        assert_eq!(report.warnings, Vec::<String>::new());
     }
 
     #[test]
