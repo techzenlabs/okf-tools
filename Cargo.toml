@@ -41,7 +41,7 @@ path = "src/bin/okf-adopt.rs"
 
 [dependencies]
 anyhow = "1"
-fancy-regex = "0.19"
+fancy-regex = "0.20"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
