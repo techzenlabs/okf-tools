@@ -39,6 +39,10 @@ fn run() -> anyhow::Result<ExitCode> {
         eprintln!("okf-check: unrecognised argument `{bad}`\n\n{USAGE}");
         return Ok(ExitCode::FAILURE);
     }
+    if let Some(why) = repeated_or_conflicting() {
+        eprintln!("okf-check: {why}\n\n{USAGE}");
+        return Ok(ExitCode::FAILURE);
+    }
     if std::env::args().any(|a| a == "--shared-paths") {
         for path in okf_tools::layouts::owned_paths() {
             println!("/{path}");
@@ -223,6 +227,37 @@ fn unknown_argument(accepted: &[&str]) -> Option<String> {
     std::env::args()
         .skip(1)
         .find(|arg| !accepted.contains(&arg.as_str()) && !arg.starts_with(AS_OF_FLAG))
+}
+
+/// The modes, of which one run takes at most one. `--shared-paths` is looked
+/// at first and returns, so given together the other would be dropped.
+const MODES: [&str; 2] = ["--layouts", "--shared-paths"];
+
+/// A mode or `--as-of=` given twice, or two modes given together.
+///
+/// Refused rather than resolved: a second `--as-of=` was ignored in favour of
+/// the first, which is a staleness gate measured against a day nobody meant.
+fn repeated_or_conflicting() -> Option<String> {
+    let mut given: Vec<&'static str> = Vec::new();
+    for arg in std::env::args().skip(1) {
+        let flag = if arg.starts_with(AS_OF_FLAG) {
+            "--as-of"
+        } else if let Some(mode) = MODES.iter().find(|mode| **mode == arg) {
+            mode
+        } else {
+            continue;
+        };
+        if given.contains(&flag) {
+            return Some(format!("{flag} is given twice"));
+        }
+        if MODES.contains(&flag)
+            && let Some(earlier) = given.iter().find(|g| MODES.contains(g))
+        {
+            return Some(format!("{earlier} and {flag} cannot be given together"));
+        }
+        given.push(flag);
+    }
+    None
 }
 
 /// The value of `--as-of=`, if it was given.

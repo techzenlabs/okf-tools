@@ -66,11 +66,39 @@ struct Args {
     pinned: BTreeMap<String, assemble::Pinned>,
 }
 
+/// The flags that take one value or pick the run's mode. A second use of one
+/// is refused rather than left to overwrite the first.
+const ONCE: [&str; 7] = [
+    "--update",
+    "--tenant",
+    "--scan",
+    "--mermaid",
+    "--bootstrap",
+    "--verify-raw",
+    "--bundles",
+];
+
+/// The modes. Each returns before the next is looked at, so two of them given
+/// together would run one and silently drop the other: refused instead.
+const MODES: [&str; 4] = ["--bootstrap", "--verify-raw", "--bundles", "--update"];
+
 fn parse() -> Result<Args, String> {
     let mut args = Args::default();
     let mut check = false;
+    let mut given: Vec<String> = Vec::new();
     let mut raw = std::env::args().skip(1);
     while let Some(arg) = raw.next() {
+        if ONCE.contains(&arg.as_str()) {
+            if given.contains(&arg) {
+                return Err(format!("{arg} is given twice"));
+            }
+            if MODES.contains(&arg.as_str())
+                && let Some(earlier) = given.iter().find(|g| MODES.contains(&g.as_str()))
+            {
+                return Err(format!("{earlier} and {arg} cannot be given together"));
+            }
+            given.push(arg.clone());
+        }
         let mut value = |name: &str| raw.next().ok_or_else(|| format!("{name} needs a value"));
         match arg.as_str() {
             "--tarball" => args.tarball = true,
@@ -87,7 +115,15 @@ fn parse() -> Result<Args, String> {
                 let (id, path) = pair
                     .split_once('=')
                     .ok_or_else(|| format!("--local wants <id>=<path>, not `{pair}`"))?;
-                args.locals.insert(id.to_owned(), PathBuf::from(path));
+                // Repeatable, one bundle per use; the same bundle twice is
+                // two answers to one question.
+                if args
+                    .locals
+                    .insert(id.to_owned(), PathBuf::from(path))
+                    .is_some()
+                {
+                    return Err(format!("--local {id} is given twice"));
+                }
             }
             "--pinned" => {
                 let triple = value("--pinned")?;
@@ -104,13 +140,16 @@ fn parse() -> Result<Args, String> {
                         "--pinned {id}: `{rev}` is not a 40-character commit"
                     ));
                 }
-                args.pinned.insert(
+                let earlier = args.pinned.insert(
                     id.to_owned(),
                     assemble::Pinned {
                         path: PathBuf::from(path),
                         rev: rev.to_owned(),
                     },
                 );
+                if earlier.is_some() {
+                    return Err(format!("--pinned {id} is given twice"));
+                }
             }
             other => return Err(format!("unrecognised argument `{other}`")),
         }

@@ -37,6 +37,12 @@ fn run() -> anyhow::Result<ExitCode> {
                 eprintln!("okf-scan: unrecognised argument `{other}`\n\n{USAGE}");
                 return Ok(ExitCode::FAILURE);
             }
+            // One root per run. A second path used to replace the first, so
+            // `okf-scan content static` scanned static/ alone and said clean.
+            path if root.is_some() => {
+                eprintln!("okf-scan: <path> is given twice, at `{path}`\n\n{USAGE}");
+                return Ok(ExitCode::FAILURE);
+            }
             path => root = Some(PathBuf::from(path)),
         }
     }

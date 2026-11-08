@@ -32,6 +32,17 @@ fn main() -> ExitCode {
     }
 }
 
+const USAGE: &str = "\
+usage: okf-migrate [--retype] [--report | --dry-run | --apply] [<path>…]
+
+With no flag, reports and writes nothing. Paths are
+bundle-relative prefixes, so a batch is one directory.
+--retype applies okf.toml's [[retype]] table to documents that
+already carry a type, and changes nothing but that field.";
+
+/// The modes, of which one run takes at most one.
+const MODES: [&str; 3] = ["--report", "--dry-run", "--apply"];
+
 fn run() -> anyhow::Result<ExitCode> {
     // Positional arguments are meaningful here (bundle-relative path
     // prefixes), so only flags are validated. An unrecognised flag still has
@@ -43,15 +54,26 @@ fn run() -> anyhow::Result<ExitCode> {
         .iter()
         .find(|a| a.starts_with("--") && !FLAGS.contains(&a.as_str()))
     {
-        eprintln!(
-            "okf-migrate: unrecognised flag `{bad}`\n\n\
-             usage: okf-migrate [--retype] [--report | --dry-run | --apply] [<path>…]\n\n\
-             With no flag, reports and writes nothing. Paths are\n\
-             bundle-relative prefixes, so a batch is one directory.\n\
-             --retype applies okf.toml's [[retype]] table to documents that\n\
-             already carry a type, and changes nothing but that field."
-        );
+        eprintln!("okf-migrate: unrecognised flag `{bad}`\n\n{USAGE}");
         return Ok(ExitCode::FAILURE);
+    }
+    // One mode per run. `--dry-run --apply` used to print the dry run and then
+    // write, and `--report --apply` to write: the flag that writes won without
+    // a word. A mode given twice is refused the same way.
+    let mut modes: Vec<&str> = Vec::new();
+    for arg in args.iter().filter(|a| MODES.contains(&a.as_str())) {
+        let why = if modes.contains(&arg.as_str()) {
+            Some(format!("{arg} is given twice"))
+        } else {
+            modes
+                .first()
+                .map(|earlier| format!("{earlier} and {arg} cannot be given together"))
+        };
+        if let Some(why) = why {
+            eprintln!("okf-migrate: {why}\n\n{USAGE}");
+            return Ok(ExitCode::FAILURE);
+        }
+        modes.push(arg);
     }
     let apply = args.iter().any(|a| a == "--apply");
     let dry_run = args.iter().any(|a| a == "--dry-run");

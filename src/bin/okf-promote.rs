@@ -65,6 +65,36 @@ enum Mode {
     Drift,
 }
 
+/// Record a mode, refusing a second one.
+///
+/// A mode given twice, or two modes given together, is refused rather than
+/// resolved to whichever came last: `--propose … --drift` pasted from two
+/// commands is a mistake, and guessing which half was meant runs the other.
+fn pick_mode(
+    slot: &mut Option<(Mode, &'static str)>,
+    flag: &'static str,
+    mode: Mode,
+) -> Result<(), String> {
+    match slot {
+        Some((_, earlier)) if *earlier == flag => Err(format!("{flag} is given twice")),
+        Some((_, earlier)) => Err(format!("{earlier} and {flag} cannot be given together")),
+        None => {
+            *slot = Some((mode, flag));
+            Ok(())
+        }
+    }
+}
+
+/// Store a single-value flag's value, refusing a second one rather than
+/// letting it overwrite the first.
+fn once<T>(slot: &mut Option<T>, flag: &str, value: T) -> Result<(), String> {
+    if slot.is_some() {
+        return Err(format!("{flag} is given twice"));
+    }
+    *slot = Some(value);
+    Ok(())
+}
+
 fn parse_args() -> Result<Args, String> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let mut mode = None;
@@ -82,16 +112,16 @@ fn parse_args() -> Result<Args, String> {
                 .ok_or_else(|| format!("{name} needs a value"))
         };
         match arg.as_str() {
-            "--propose" => mode = Some(Mode::Propose),
-            "--refresh" => mode = Some(Mode::Refresh),
-            "--drift" => mode = Some(Mode::Drift),
+            "--propose" => pick_mode(&mut mode, "--propose", Mode::Propose)?,
+            "--refresh" => pick_mode(&mut mode, "--refresh", Mode::Refresh)?,
+            "--drift" => pick_mode(&mut mode, "--drift", Mode::Drift)?,
             "--dry-run" => dry_run = true,
             "--to" => {
-                to = Some(value("--to")?);
+                once(&mut to, "--to", value("--to")?)?;
                 index = index.saturating_add(1);
             }
             "--draft" => {
-                draft = Some(PathBuf::from(value("--draft")?));
+                once(&mut draft, "--draft", PathBuf::from(value("--draft")?))?;
                 index = index.saturating_add(1);
             }
             other if other.starts_with("--") => {
@@ -101,7 +131,7 @@ fn parse_args() -> Result<Args, String> {
         }
         index = index.saturating_add(1);
     }
-    let mode =
+    let (mode, _) =
         mode.ok_or_else(|| "one of --propose, --refresh or --drift is required".to_owned())?;
     Ok(Args {
         mode,

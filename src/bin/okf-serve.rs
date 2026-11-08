@@ -210,15 +210,36 @@ fn send(request: Request, status: u16, kind: &str, body: &[u8], head_only: bool)
     status
 }
 
+/// The flags that take one value, every flag this command has but `--help`.
+const SINGLE_VALUE: [&str; 5] = [
+    "--root",
+    "--bind",
+    "--port",
+    "--threads",
+    "--require-header",
+];
+
 fn parse() -> anyhow::Result<Option<Options>> {
     let mut root: Option<PathBuf> = None;
     let mut bind: IpAddr = IpAddr::from([127, 0, 0, 1]);
     let mut port: u16 = 8080;
     let mut require_header: Option<String> = None;
     let mut threads: usize = 8;
+    // Every flag here takes one value. A second use is refused rather than
+    // left to overwrite the first: `--root` given twice serves whichever came
+    // last, and a pasted `--bind 0.0.0.0` after `--bind 127.0.0.1` widens the
+    // boundary without a word.
+    let mut given: Vec<String> = Vec::new();
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
+        if SINGLE_VALUE.contains(&arg.as_str()) {
+            if given.contains(&arg) {
+                eprintln!("okf-serve: {arg} is given twice\n\n{USAGE}");
+                return Ok(None);
+            }
+            given.push(arg.clone());
+        }
         let mut value = || -> anyhow::Result<String> {
             args.next()
                 .ok_or_else(|| anyhow::anyhow!("{arg} needs a value\n\n{USAGE}"))
