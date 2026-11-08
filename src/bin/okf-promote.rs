@@ -95,6 +95,25 @@ fn once<T>(slot: &mut Option<T>, flag: &str, value: T) -> Result<(), String> {
     Ok(())
 }
 
+/// Which flags each mode reads; `<path>` is a positional argument. A flag
+/// given to a mode that does not read it is refused: `--drift extra.md --to
+/// pub --draft d.md` exited 0 having read none of the three.
+const READS: [(&str, &[&str]); 3] = [
+    ("--propose", &["<path>", "--to", "--draft", "--dry-run"]),
+    ("--refresh", &["<path>", "--dry-run"]),
+    ("--drift", &[]),
+];
+
+/// The first flag in `used` that `mode` does not read, as a usage error.
+fn unread(mode: &str, used: &[&str]) -> Option<String> {
+    let reads = READS
+        .iter()
+        .find(|(name, _)| *name == mode)
+        .map_or(&[][..], |(_, reads)| *reads);
+    let flag = used.iter().find(|flag| !reads.contains(flag))?;
+    Some(format!("{flag} has no effect with {mode}"))
+}
+
 fn parse_args() -> Result<Args, String> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let mut mode = None;
@@ -131,8 +150,20 @@ fn parse_args() -> Result<Args, String> {
         }
         index = index.saturating_add(1);
     }
-    let (mode, _) =
+    let (mode, mode_flag) =
         mode.ok_or_else(|| "one of --propose, --refresh or --drift is required".to_owned())?;
+    let used: Vec<&str> = [
+        ("<path>", !positional.is_empty()),
+        ("--to", to.is_some()),
+        ("--draft", draft.is_some()),
+        ("--dry-run", dry_run),
+    ]
+    .into_iter()
+    .filter_map(|(flag, given)| given.then_some(flag))
+    .collect();
+    if let Some(why) = unread(mode_flag, &used) {
+        return Err(why);
+    }
     // `--propose` drafts one page, and `propose` reads the first path only, so
     // a second one was dropped without a word. `--refresh` takes several.
     if mode == Mode::Propose

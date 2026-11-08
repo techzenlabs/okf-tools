@@ -82,12 +82,59 @@ const ONCE: [&str; 7] = [
 /// together would run one and silently drop the other: refused instead.
 const MODES: [&str; 4] = ["--bootstrap", "--verify-raw", "--bundles", "--update"];
 
+/// The run with no mode flag: the assembly itself.
+const DEFAULT_RUN: &str = "";
+
+/// Which flags each mode reads. A flag given to a mode that does not read it
+/// is refused: `--local alpha=/a --tarball --update alpha` rewrote the pin
+/// and dropped both, and `--tenant` without `--bootstrap` named nothing.
+const READS: [(&str, &[&str]); 5] = [
+    (
+        DEFAULT_RUN,
+        &["--tarball", "--mermaid", "--local", "--pinned"],
+    ),
+    ("--bootstrap", &["--tenant", "--scan"]),
+    ("--verify-raw", &[]),
+    ("--bundles", &["--check"]),
+    ("--update", &[]),
+];
+
+/// The first flag in `used` that `mode` does not read, as a usage error.
+fn unread(mode: &str, used: &[&str]) -> Option<String> {
+    let reads = READS
+        .iter()
+        .find(|(name, _)| *name == mode)
+        .map_or(&[][..], |(_, reads)| *reads);
+    let flag = used.iter().find(|flag| !reads.contains(flag))?;
+    if mode != DEFAULT_RUN {
+        return Some(format!("{flag} has no effect with {mode}"));
+    }
+    let readers: Vec<&str> = READS
+        .iter()
+        .filter(|(_, reads)| reads.contains(flag))
+        .map(|(name, _)| *name)
+        .collect();
+    Some(format!(
+        "{flag} has no effect without {}",
+        readers.join(" or ")
+    ))
+}
+
 fn parse() -> Result<Args, String> {
     let mut args = Args::default();
     let mut check = false;
     let mut given: Vec<String> = Vec::new();
+    let mut used: Vec<&'static str> = Vec::new();
     let mut raw = std::env::args().skip(1);
     while let Some(arg) = raw.next() {
+        if let Some(flag) = READS
+            .iter()
+            .flat_map(|(_, reads)| reads.iter())
+            .find(|flag| **flag == arg)
+            && !used.contains(flag)
+        {
+            used.push(flag);
+        }
         if ONCE.contains(&arg.as_str()) {
             if given.contains(&arg) {
                 return Err(format!("{arg} is given twice"));
@@ -154,10 +201,14 @@ fn parse() -> Result<Args, String> {
             other => return Err(format!("unrecognised argument `{other}`")),
         }
     }
+    let mode = given
+        .iter()
+        .find(|flag| MODES.contains(&flag.as_str()))
+        .map_or(DEFAULT_RUN, String::as_str);
+    if let Some(why) = unread(mode, &used) {
+        return Err(why);
+    }
     if check {
-        if args.bundles.is_none() {
-            return Err("--check belongs to --bundles".to_owned());
-        }
         args.bundles = Some(BundlesMode::Check);
     }
     Ok(args)

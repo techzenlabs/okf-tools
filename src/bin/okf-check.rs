@@ -39,7 +39,7 @@ fn run() -> anyhow::Result<ExitCode> {
         eprintln!("okf-check: unrecognised argument `{bad}`\n\n{USAGE}");
         return Ok(ExitCode::FAILURE);
     }
-    if let Some(why) = repeated_or_conflicting() {
+    if let Some(why) = refused_arguments() {
         eprintln!("okf-check: {why}\n\n{USAGE}");
         return Ok(ExitCode::FAILURE);
     }
@@ -233,15 +233,56 @@ fn unknown_argument(accepted: &[&str]) -> Option<String> {
 /// at first and returns, so given together the other would be dropped.
 const MODES: [&str; 2] = ["--layouts", "--shared-paths"];
 
-/// A mode or `--as-of=` given twice, or two modes given together.
+/// The run with no mode flag: the conformance check.
+const DEFAULT_RUN: &str = "";
+
+/// Which flags each mode reads. A flag given to a mode that does not read it
+/// is refused: `--shared-paths --as-of=nonsense` printed the list and exited
+/// 0, the day never so much as parsed.
+const READS: [(&str, &[&str]); 3] = [
+    (DEFAULT_RUN, &["--quiet", "--as-of"]),
+    ("--layouts", &[]),
+    ("--shared-paths", &[]),
+];
+
+/// The first flag in `used` that `mode` does not read, as a usage error.
+fn unread(mode: &str, used: &[&str]) -> Option<String> {
+    let reads = READS
+        .iter()
+        .find(|(name, _)| *name == mode)
+        .map_or(&[][..], |(_, reads)| *reads);
+    let flag = used.iter().find(|flag| !reads.contains(flag))?;
+    if mode != DEFAULT_RUN {
+        return Some(format!("{flag} has no effect with {mode}"));
+    }
+    let readers: Vec<&str> = READS
+        .iter()
+        .filter(|(_, reads)| reads.contains(flag))
+        .map(|(name, _)| *name)
+        .collect();
+    Some(format!(
+        "{flag} has no effect without {}",
+        readers.join(" or ")
+    ))
+}
+
+/// A mode or `--as-of=` given twice, two modes given together, or a flag the
+/// chosen mode does not read.
 ///
 /// Refused rather than resolved: a second `--as-of=` was ignored in favour of
 /// the first, which is a staleness gate measured against a day nobody meant.
-fn repeated_or_conflicting() -> Option<String> {
+fn refused_arguments() -> Option<String> {
     let mut given: Vec<&'static str> = Vec::new();
+    let mut used: Vec<&'static str> = Vec::new();
     for arg in std::env::args().skip(1) {
         let flag = if arg.starts_with(AS_OF_FLAG) {
             "--as-of"
+        } else if arg == "--quiet" {
+            // A switch: given twice it means what it meant once.
+            if !used.contains(&"--quiet") {
+                used.push("--quiet");
+            }
+            continue;
         } else if let Some(mode) = MODES.iter().find(|mode| **mode == arg) {
             mode
         } else {
@@ -256,8 +297,16 @@ fn repeated_or_conflicting() -> Option<String> {
             return Some(format!("{earlier} and {flag} cannot be given together"));
         }
         given.push(flag);
+        if !MODES.contains(&flag) {
+            used.push(flag);
+        }
     }
-    None
+    let mode = given
+        .iter()
+        .find(|flag| MODES.contains(flag))
+        .copied()
+        .unwrap_or(DEFAULT_RUN);
+    unread(mode, &used)
 }
 
 /// The value of `--as-of=`, if it was given.

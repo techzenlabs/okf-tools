@@ -1,11 +1,13 @@
-//! A single-value flag given twice, and two modes given together, are refused.
+//! A single-value flag given twice, two modes given together, and a flag the
+//! chosen mode does not read are refused.
 //!
 //! Every binary here parses its own command line by hand, and each used to let
 //! a second `--root`, `--to` or `--as-of=` replace the first without a word,
-//! and run one of two modes given together while dropping the other. Each case
-//! below is now a usage error that names the flag, on stderr, with the exit
-//! code every one of these binaries already uses for a usage error (1), and
-//! with nothing on stdout because nothing ran.
+//! run one of two modes given together while dropping the other, and accept a
+//! flag the mode never looked at. Each case below is now a usage error that
+//! names the flag, on stderr, with the exit code every one of these binaries
+//! already uses for a usage error (1), and with nothing on stdout because
+//! nothing ran.
 
 #![expect(
     clippy::expect_used,
@@ -102,7 +104,9 @@ fn assert_parsed(binary: &str, cwd: &Path, args: &[&str]) -> Output {
     let output = run(binary, cwd, args);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        !stderr.contains("usage:") && !stderr.contains("given twice"),
+        !stderr.contains("usage:")
+            && !stderr.contains("given twice")
+            && !stderr.contains("has no effect"),
         "{args:?} should get past the parser; stderr: {stderr}"
     );
     output
@@ -410,5 +414,167 @@ fn okf_scan_takes_one_path_and_repeated_excludes() {
         output.status.success(),
         "stdout: {}",
         String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// One mode of a binary: its name in messages (empty for the run with no mode
+/// flag), the arguments that select it, and the flags it reads.
+struct ModeSpec {
+    name: &'static str,
+    args: &'static [&'static str],
+    reads: &'static [&'static str],
+}
+
+/// A flag a mode may read, and the arguments that give it.
+type FlagSpec = (&'static str, &'static [&'static str]);
+
+/// The whole mode-by-flag table for one binary, run both ways: every flag a
+/// mode does not read is refused with that mode, and each mode given every
+/// flag it does read gets past the parser. Returns the number of refusals, so
+/// a test can pin the size of the table it ran.
+fn assert_mode_table(binary: &str, modes: &[ModeSpec], flags: &[FlagSpec]) -> usize {
+    let scratch = Scratch::new("mode-table");
+    let mut refused = 0_usize;
+    for mode in modes {
+        let mut control: Vec<&str> = mode.args.to_vec();
+        for (flag, flag_args) in flags {
+            if mode.reads.contains(flag) {
+                control.extend_from_slice(flag_args);
+                continue;
+            }
+            let message = if mode.name.is_empty() {
+                let readers: Vec<&str> = modes
+                    .iter()
+                    .filter(|other| other.reads.contains(flag))
+                    .map(|other| other.name)
+                    .collect();
+                format!("{flag} has no effect without {}", readers.join(" or "))
+            } else {
+                format!("{flag} has no effect with {}", mode.name)
+            };
+            // The flag before the mode and after it: the refusal cannot depend
+            // on which the parser met first.
+            let after: Vec<&str> = mode.args.iter().chain(flag_args.iter()).copied().collect();
+            let before: Vec<&str> = flag_args.iter().chain(mode.args.iter()).copied().collect();
+            assert_refused(binary, &after, &message);
+            assert_refused(binary, &before, &message);
+            refused = refused.saturating_add(1);
+        }
+        assert_parsed(binary, scratch.path(), &control);
+    }
+    refused
+}
+
+#[test]
+fn okf_promote_refuses_a_flag_its_mode_does_not_read() {
+    let modes = [
+        ModeSpec {
+            name: "--propose",
+            args: &["--propose"],
+            reads: &["<path>", "--to", "--draft", "--dry-run"],
+        },
+        ModeSpec {
+            name: "--refresh",
+            args: &["--refresh"],
+            reads: &["<path>", "--dry-run"],
+        },
+        ModeSpec {
+            name: "--drift",
+            args: &["--drift"],
+            reads: &[],
+        },
+    ];
+    let flags: [FlagSpec; 4] = [
+        ("<path>", &["page.md"]),
+        ("--to", &["--to", "pub"]),
+        ("--draft", &["--draft", "d.md"]),
+        ("--dry-run", &["--dry-run"]),
+    ];
+    assert_eq!(assert_mode_table(PROMOTE, &modes, &flags), 6);
+}
+
+#[test]
+fn okf_check_refuses_a_flag_its_mode_does_not_read() {
+    let modes = [
+        ModeSpec {
+            name: "",
+            args: &[],
+            reads: &["--quiet", "--as-of"],
+        },
+        ModeSpec {
+            name: "--layouts",
+            args: &["--layouts"],
+            reads: &[],
+        },
+        ModeSpec {
+            name: "--shared-paths",
+            args: &["--shared-paths"],
+            reads: &[],
+        },
+    ];
+    let flags: [FlagSpec; 2] = [
+        ("--quiet", &["--quiet"]),
+        ("--as-of", &["--as-of=2026-01-01"]),
+    ];
+    assert_eq!(assert_mode_table(CHECK, &modes, &flags), 4);
+    // The case that exited 0 and printed the list: the day was never parsed.
+    assert_refused(
+        CHECK,
+        &["--shared-paths", "--as-of=nonsense"],
+        "--as-of has no effect with --shared-paths",
+    );
+}
+
+#[test]
+fn okf_assemble_refuses_a_flag_its_mode_does_not_read() {
+    let modes = [
+        ModeSpec {
+            name: "",
+            args: &[],
+            reads: &["--tarball", "--mermaid", "--local", "--pinned"],
+        },
+        ModeSpec {
+            name: "--bootstrap",
+            args: &["--bootstrap"],
+            reads: &["--tenant", "--scan"],
+        },
+        ModeSpec {
+            name: "--verify-raw",
+            args: &["--verify-raw"],
+            reads: &[],
+        },
+        ModeSpec {
+            name: "--bundles",
+            args: &["--bundles"],
+            reads: &["--check"],
+        },
+        ModeSpec {
+            name: "--update",
+            args: &["--update", "alpha"],
+            reads: &[],
+        },
+    ];
+    let flags: [FlagSpec; 7] = [
+        ("--tarball", &["--tarball"]),
+        ("--mermaid", &["--mermaid", "a.js"]),
+        ("--local", &["--local", "alpha=/a"]),
+        (
+            "--pinned",
+            &[
+                "--pinned",
+                "alpha=/src/a@0123456789abcdef0123456789abcdef01234567",
+            ],
+        ),
+        ("--tenant", &["--tenant", "one"]),
+        ("--scan", &["--scan", "absent"]),
+        ("--check", &["--check"]),
+    ];
+    // Seven flags, each read by exactly one of five modes: 7 × 4 refusals.
+    assert_eq!(assert_mode_table(ASSEMBLE, &modes, &flags), 28);
+    // The case from review: the pin was rewritten and both flags dropped.
+    assert_refused(
+        ASSEMBLE,
+        &["--local", "alpha=/a", "--tarball", "--update", "alpha"],
+        "--local has no effect with --update",
     );
 }
