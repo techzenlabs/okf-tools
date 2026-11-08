@@ -189,6 +189,26 @@ fn okf_promote_takes_each_flag_once() {
 }
 
 #[test]
+fn okf_promote_refuses_a_second_source_path() {
+    assert_refused(
+        PROMOTE,
+        &["--propose", "a.md", "b.md", "--to", "pub"],
+        "<path> is given twice, at `b.md`",
+    );
+}
+
+#[test]
+fn okf_promote_takes_one_source_path_and_several_pages_to_refresh() {
+    let scratch = Scratch::new("promote-paths");
+    for args in [
+        vec!["--propose", "a.md", "--to", "pub"],
+        vec!["--refresh", "a.md", "b.md", "c.md"],
+    ] {
+        assert_parsed(PROMOTE, scratch.path(), &args);
+    }
+}
+
+#[test]
 fn okf_serve_refuses_a_repeated_flag() {
     for (args, flag) in [
         (vec!["--root", "a", "--root", "b"], "--root"),

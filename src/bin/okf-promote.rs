@@ -133,6 +133,13 @@ fn parse_args() -> Result<Args, String> {
     }
     let (mode, _) =
         mode.ok_or_else(|| "one of --propose, --refresh or --drift is required".to_owned())?;
+    // `--propose` drafts one page, and `propose` reads the first path only, so
+    // a second one was dropped without a word. `--refresh` takes several.
+    if mode == Mode::Propose
+        && let Some(extra) = positional.get(1)
+    {
+        return Err(format!("<path> is given twice, at `{extra}`"));
+    }
     Ok(Args {
         mode,
         to,
