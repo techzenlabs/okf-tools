@@ -23,6 +23,7 @@
         system,
         ...
       }: let
+        pagefind = import ./nix/pagefind.nix {inherit pkgs;};
         okf-tools-unwrapped = pkgs.rustPlatform.buildRustPackage {
           pname = "okf-tools";
           version = "0.1.0";
@@ -132,7 +133,7 @@
                 nativeBuildInputs = [
                   okf-tools
                   pkgs.hugo
-                  pkgs.pagefind
+                  pagefind
                   pkgs.git
                   pkgs.python3
                 ];
@@ -306,7 +307,7 @@
             # The site half, so `just build` and `just serve` work in a
             # checkout of this repository as well as in a tenant's.
             pkgs.hugo
-            pkgs.pagefind
+            pagefind
             pkgs.just
             pkgs.zstd
           ];

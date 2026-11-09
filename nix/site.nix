@@ -69,7 +69,7 @@
   hasAllowFile = builtins.pathExists (manifestDir + "/credentials.allow");
 in
   pkgs.runCommand "${manifest.tenant}-site" {
-    nativeBuildInputs = [okf pkgs.hugo pkgs.pagefind];
+    nativeBuildInputs = [okf pkgs.hugo (import ./pagefind.nix {inherit pkgs;})];
   } ''
     export HOME="$TMPDIR"
     site="$TMPDIR/site"
