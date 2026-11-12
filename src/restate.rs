@@ -35,6 +35,9 @@
 //!
 //! **All four skip fenced code.** A promoted page quoting a log line or a
 //! query is quoting a machine, and a machine's output is not a restatement.
+//! A fence closes the way the Markdown spec closes it: only on a line of the
+//! opener's character with a run at least as long, and an unclosed fence runs
+//! to the end of the document.
 
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
@@ -71,8 +74,6 @@ pub const PUBLIC_PREFIXES: &[&str] = &[
     "AES", "ANSI", "CVE", "CWE", "DICOM", "EN", "FIPS", "HL", "HTTP", "IEC", "IEEE", "ISO", "NIST",
     "OWASP", "RFC", "RSA", "SHA", "TLS", "UTF",
 ];
-
-static FENCE: LazyLock<Regex> = LazyLock::new(|| compiled(r"(?m)^\s*(?:```|~~~)"));
 
 static BULLET: LazyLock<Regex> = LazyLock::new(|| compiled(r"^\s*(?:[-*+]|\d+[.)])\s+\S"));
 
@@ -126,7 +127,7 @@ pub fn readable_body(text: &str) -> String {
     // A leading `---` opens front matter. A `---` anywhere else is a thematic
     // break and opens nothing.
     let mut first = true;
-    let mut fenced = false;
+    let mut fence: Option<Fence> = None;
     let mut pending: Vec<String> = Vec::new();
     for line in lines.by_ref() {
         if first {
@@ -144,19 +145,101 @@ pub fn readable_body(text: &str) -> String {
             }
             continue;
         }
-        if FENCE.is_match(line).unwrap_or(false) {
-            fenced = !fenced;
-            pending.push(String::new());
-            continue;
-        }
-        pending.push(if fenced {
-            String::new()
+        // A fence line, opening or closing, is blanked with the code it
+        // bounds, so neither an info string nor a closer is read as prose.
+        let code = if let Some(open) = fence {
+            if open.closed_by(line) {
+                fence = None;
+            }
+            true
         } else {
-            line.to_owned()
-        });
+            fence = Fence::opened_by(line);
+            fence.is_some()
+        };
+        pending.push(if code { String::new() } else { line.to_owned() });
     }
     out.append(&mut pending);
     out.join("\n")
+}
+
+/// The character a fence is made of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Marker {
+    Backtick,
+    Tilde,
+}
+
+impl Marker {
+    fn of(byte: u8) -> Option<Self> {
+        match byte {
+            b'`' => Some(Self::Backtick),
+            b'~' => Some(Self::Tilde),
+            _ => None,
+        }
+    }
+
+    fn byte(self) -> u8 {
+        match self {
+            Self::Backtick => b'`',
+            Self::Tilde => b'~',
+        }
+    }
+}
+
+/// An open fenced code block: the character it was opened with and the length
+/// of the opening run. Only a line of the same character with a run at least
+/// this long closes it, which is the rule the Markdown spec sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Fence {
+    marker: Marker,
+    run: usize,
+}
+
+/// The shortest run of backticks or tildes that makes a fence.
+const FENCE_MIN_RUN: usize = 3;
+
+/// The most spaces a fence line may be indented. Four make an indented code
+/// line instead.
+const FENCE_MAX_INDENT: usize = 3;
+
+impl Fence {
+    /// The fence `line` opens, if it is an opening fence.
+    ///
+    /// A backtick fence's info string may not hold a backtick, because such a
+    /// line is inline code in a paragraph. A tilde fence's info string may
+    /// hold anything.
+    fn opened_by(line: &str) -> Option<Self> {
+        let (marker, run, rest) = fence_run(line)?;
+        if marker == Marker::Backtick && rest.contains('`') {
+            return None;
+        }
+        Some(Self { marker, run })
+    }
+
+    /// Whether `line` closes this fence: the same character, a run at least
+    /// as long as the opener's, and nothing after it but spaces or tabs.
+    fn closed_by(self, line: &str) -> bool {
+        fence_run(line).is_some_and(|(marker, run, rest)| {
+            marker == self.marker && run >= self.run && rest.trim_matches([' ', '\t']).is_empty()
+        })
+    }
+}
+
+/// The marker, run length and remainder of a line that starts, after at most
+/// three spaces, with three or more backticks or tildes.
+fn fence_run(line: &str) -> Option<(Marker, usize, &str)> {
+    let body = line.trim_start_matches(' ');
+    let indent = line.len().checked_sub(body.len())?;
+    if indent > FENCE_MAX_INDENT {
+        return None;
+    }
+    let marker = Marker::of(*body.as_bytes().first()?)?;
+    let run = body.bytes().take_while(|&b| b == marker.byte()).count();
+    if run < FENCE_MIN_RUN {
+        return None;
+    }
+    // The run is ASCII, so `run` is a char boundary.
+    Some((marker, run, body.get(run..)?))
 }
 
 /// Labels the draft carries and the source does not.
@@ -334,7 +417,7 @@ mod tests {
     /// which in a gate means the gate is missing rather than loud.
     #[test]
     fn every_pattern_compiles() {
-        for pattern in [&*FENCE, &*BULLET, &*IDENTIFIER, &*DATE, &*OCCASION] {
+        for pattern in [&*BULLET, &*IDENTIFIER, &*DATE, &*OCCASION] {
             assert_ne!(pattern.as_str(), "");
         }
     }
@@ -456,6 +539,87 @@ mod tests {
     fn a_bare_year_is_not_a_date() {
         let draft = "---\ntype: \"System\"\n---\n\nThe 2024 excess was discussed at length in the register.\n";
         assert_eq!(reconstructed_meetings(draft), Vec::<Finding>::new());
+    }
+
+    /// A tilde fence is closed by tildes and by nothing else, so a
+    /// three-backtick line inside it is code. Flipping on that line left the
+    /// fence open and hid every sentence after it from all four gates.
+    #[test]
+    fn a_tilde_fence_holding_a_backtick_line_closes_on_its_tilde() {
+        let text = "---\ntype: \"System\"\n---\n\n~~~markdown\n```\nDEC-066\n~~~\n\nWorked through on a joint call on July 31, 2026.\n";
+        let body = super::readable_body(text);
+        assert!(!body.contains("DEC-066"), "{body}");
+        assert_eq!(
+            body.lines().nth(9),
+            Some("Worked through on a joint call on July 31, 2026.")
+        );
+        let found = reconstructed_meetings(text);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].line, 10);
+    }
+
+    /// A four-backtick fence is closed only by a run of four or more
+    /// backticks, so the three-backtick lines inside it are code and the
+    /// prose after it is prose.
+    #[test]
+    fn a_four_backtick_fence_holding_three_backtick_lines_is_all_code() {
+        let text = "Before.\n\n````markdown\n```\nSee DEC-066.\n```\n````\n\nAfter.\n";
+        let body = super::readable_body(text);
+        assert!(!body.contains("DEC-066"), "{body}");
+        assert!(body.contains("Before."), "{body}");
+        assert!(body.contains("After."), "{body}");
+        assert_eq!(body.lines().count(), text.lines().count());
+    }
+
+    /// A closer may be longer than its opener. Here the three-backtick line
+    /// inside does not close the four-backtick fence and the six-backtick
+    /// line does.
+    #[test]
+    fn a_closer_longer_than_its_opener_closes_the_fence() {
+        let text = "````\n```\nDEC-066\n``````\n\nAfter.\n";
+        let body = super::readable_body(text);
+        assert!(!body.contains("DEC-066"), "{body}");
+        assert!(body.contains("After."), "{body}");
+    }
+
+    /// A closing fence carries no info string. A three-backtick `rust` line
+    /// inside a three-backtick fence is code, not the end of it.
+    #[test]
+    fn a_fence_line_with_an_info_string_does_not_close() {
+        let text = "```\n```rust\nDEC-066\n```\n\nAfter.\n";
+        let body = super::readable_body(text);
+        assert!(!body.contains("DEC-066"), "{body}");
+        assert!(body.contains("After."), "{body}");
+    }
+
+    /// Four spaces of indent make an indented code line, not a fence, so it
+    /// opens nothing and the prose after it is still read.
+    #[test]
+    fn a_fence_indented_four_spaces_opens_nothing() {
+        let text = "Before.\n\n    ```\n\nAfter.\n";
+        let body = super::readable_body(text);
+        assert!(body.contains("After."), "{body}");
+    }
+
+    /// A backtick fence's info string may not hold a backtick; a line like
+    /// this is inline code in a paragraph and opens nothing.
+    #[test]
+    fn a_backtick_line_with_a_backtick_in_its_info_string_opens_nothing() {
+        let text = "```inline` code\n\nAfter.\n";
+        let body = super::readable_body(text);
+        assert!(body.contains("```inline` code"), "{body}");
+        assert!(body.contains("After."), "{body}");
+    }
+
+    /// An unclosed fence runs to the end of the document, as a Markdown
+    /// renderer shows it.
+    #[test]
+    fn an_unclosed_fence_runs_to_the_end_of_the_document() {
+        let text = "Before.\n\n~~~\nDEC-066\n```\n\nStill code.\n";
+        let body = super::readable_body(text);
+        assert!(body.contains("Before."), "{body}");
+        assert!(!body.contains("DEC-066"), "{body}");
+        assert!(!body.contains("Still code."), "{body}");
     }
 
     /// A quoted log line is a machine's output, not a restatement.
